@@ -1,0 +1,12 @@
+{
+  "name": "rrb-trainer-tools",
+  "private": true,
+  "description": "Sandbox-side tooling. sync-guides.mjs pulls the real guide files from GitHub (moehxn/guideee) via the authenticated gh CLI and writes parsed guide JSON into ../data/guides/.",
+  "type": "module",
+  "scripts": {
+    "sync-guides": "node sync-guides.mjs"
+  },
+  "dependencies": {
+    "pdfjs-dist": "^3.11.174"
+  }
+}

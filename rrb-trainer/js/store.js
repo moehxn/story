@@ -61,6 +61,7 @@ function defaultState() {
     days: {},       // 'YYYY-MM-DD' -> { q, c, min, concepts, sections }
     plan: null,     // 10-day plan
     resume: null,   // { label, route }
+    githubSync: null, // GitHub guide source state (js/guides/github.js)
     onboarded: false,
   };
 }

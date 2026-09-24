@@ -6,6 +6,7 @@
 import { S, Bank, guideProgress } from '../store.js';
 import { SUBJECTS, topicsOf, TOPIC_BY_ID, GUIDE_EXTRA_BUCKETS } from '../syllabus.js';
 import { parseGuide, finalizeGuide, readFileAsGuide, removeGuide, setGuideQuestionAnswer, markGuideVerified, exportGuideJSON } from '../guides/importer.js';
+import { GH, ghSyncState, syncGuides, checkForUpdates, ghBadge } from '../guides/github.js';
 import { $, $$, esc, nl2br, setView, setTopbarActions, nav, sourceChip, bar, pct, toast, modal, confirmModal, emptyState, fmtDate } from './core.js';
 
 const DEMO_GUIDE = `CHAPTER 1: Percentage — Basic Models
@@ -49,9 +50,11 @@ export function guidesPage() {
     <div class="pagehead"><h1>Guides</h1>
       <p>Your uploaded guides are the PRIMARY study material. They are mapped to the official syllabus automatically — and you approve the mapping.</p></div>
     <div class="warnbanner">⚠️ Imported guide content is not automatically verified. Exam references are shown only when the guide itself states them.</div>
+    ${githubCardHTML()}
     <div class="card">
+      <div class="plabel" style="margin-top:0">Manual import (alternative)</div>
       <div class="row">
-        <button class="btn primary" data-act="import">＋ Import guide</button>
+        <button class="btn primary" data-act="import">＋ Import guide file</button>
         <button class="btn" data-act="demo">Load demo guide (test the flow)</button>
       </div>
       <p class="small mb0" style="margin-top:10px">Accepted: PDF (needs internet once), TXT, MD, HTML, exported guide JSON, or pasted text. The demo guide is sample content to try the pipeline — it is not from any real book.</p>
@@ -59,13 +62,13 @@ export function guidesPage() {
     ${guides.length ? guides.map(g => {
       const gp = guideProgress(g.id);
       return `<button class="item" data-act="open:${g.id}">
-        <div class="ic" style="background:#1e40af">📗</div>
+        <div class="ic" style="background:${g.source === 'github' ? '#1d4ed8' : '#1e40af'}">${g.source === 'github' ? '🐙' : '📗'}</div>
         <div class="ibody"><b>${esc(g.title)}</b>
-          <small>${g.sections.filter(s => s.include).length} sections · ${gp.qTotal} questions · imported ${fmtDate(g.importedAt.slice(0, 10))}${g.verified ? ' · ✅ you marked verified' : ' · unverified'}</small>
+          <small>${g.source === 'github' ? 'GitHub · ' : ''}${g.sections.filter(s => s.include).length} sections · ${gp.qTotal} questions · imported ${fmtDate(g.importedAt.slice(0, 10))}${g.verified ? ' · ✅ you marked verified' : ' · unverified'}</small>
           <div style="margin-top:5px">${bar(pct(gp.inDone + gp.exDone, Math.max(1, gp.inTotal + gp.exTotal)))}</div></div>
         <div class="iend">${gp.qNoAns ? `<span class="chip red">${gp.qNoAns} need answers</span>` : ''}</div>
       </button>`;
-    }).join('') : emptyState('📖', 'No guides imported yet', 'Import your Maths, Reasoning, Science and GK guides. They take priority over all other question sources.')}
+    }).join('') : emptyState('📖', 'No guides imported yet', 'Sync your GitHub guides above, or import your Maths, Reasoning, Science and GK guide files. They take priority over all other question sources.')}
   `);
   $$('[data-act]').forEach(b => b.addEventListener('click', () => {
     const [what, a] = b.dataset.act.split(':');
@@ -73,6 +76,84 @@ export function guidesPage() {
     if (what === 'demo') doImport(DEMO_GUIDE, { fileName: 'demo-guide.txt', title: 'Demo Guide (test content)' });
     if (what === 'open') nav(`#/guide/${a}`);
   }));
+  bindGithubCard();
+}
+
+/* ================= GitHub guide source (moehxn/guideee) ================= */
+function githubCardHTML() {
+  const st = ghSyncState();
+  const b = ghBadge();
+  const files = st.files || [];
+  const rows = files.map(f => {
+    if (f.status === 'imported' && f.guideId && S.state.guides[f.guideId]) {
+      const gp = guideProgress(f.guideId);
+      const total = Math.max(1, gp.inTotal + gp.exTotal);
+      return `<button class="item" data-ghopen="${esc(f.guideId)}">
+        <div class="ic" style="background:#1d4ed8">📄</div>
+        <div class="ibody"><b>${esc(f.title || f.path)}</b>
+          <small>${esc(f.subject || '—')} · ${f.sections || 0} sections · ${f.questions || 0} questions${f.syncedAt ? ' · updated ' + fmtDate(String(f.syncedAt).slice(0, 10)) : ''}</small>
+          <div style="margin-top:5px">${bar(pct(gp.inDone + gp.exDone, total))}</div></div>
+        <div class="iend"><span class="chip green">imported</span></div>
+      </button>`;
+    }
+    return `<div class="item" style="cursor:default">
+      <div class="ic" style="background:#64748b">📄</div>
+      <div class="ibody"><b>${esc(f.path)}</b>
+        <small style="display:block;color:var(--bad)">${esc(f.error || 'not imported')}</small></div>
+      <div class="iend"><span class="chip red">failed</span></div>
+    </div>`;
+  }).join('');
+
+  return `
+  <div class="card" id="ghcard">
+    <div class="row between" style="align-items:flex-start;gap:10px">
+      <div><b>RRB Technician Guides</b>
+        <small style="display:block;margin-top:2px">Source: GitHub · Repository: guideee (${esc(GH.owner)}/${esc(GH.repo)})</small></div>
+      <span class="chip ${b.cls}" id="ghbadge">${b.label}</span>
+    </div>
+    <div id="ghreport"></div>
+    <div class="small" style="margin-top:8px;line-height:1.55">${
+      st.lastSyncAt
+        ? `Last sync: ${new Date(st.lastSyncAt).toLocaleString()}${st.lastMode === 'bundled' ? ' (from bundled sync data)' : ' (live from GitHub)'}. Guide questions are labelled GUIDE.`
+        : 'Your real guides are pulled from the GitHub repository when you press “Sync Guides”. Nothing is imported and nothing is faked until a sync actually succeeds.'
+    }</div>
+    <div class="row" style="margin-top:10px">
+      <button class="btn primary" id="ghsync">⟳ Sync Guides</button>
+      <button class="btn" id="ghcheck">Check for Updates</button>
+    </div>
+    ${files.length ? `<div class="section-label" style="margin-top:12px">Guide files in the repository (${files.length})</div>${rows}` : ''}
+    <p class="small mb0" style="margin-top:10px">The app never stores GitHub passwords or tokens. If the repository is private, the browser cannot read it — connect/authenticate GitHub (or open the repo), or use the manual import below.</p>
+  </div>`;
+}
+
+function bindGithubCard() {
+  $('#ghsync')?.addEventListener('click', async () => {
+    const badge = $('#ghbadge');
+    if (badge) { badge.textContent = 'Importing'; badge.className = 'chip blue'; }
+    $('#ghreport').innerHTML = '<div class="infobanner">Connecting to GitHub and importing guide files…</div>';
+    const res = await syncGuides();
+    guidesPage();
+    const cls = res.ok ? 'infobanner' : 'dangerbanner';
+    const failedFiles = (res.files || []).filter(f => f.status === 'failed');
+    const extra = failedFiles.length
+      ? '<br>' + failedFiles.map(f => `✗ ${esc(f.path)} — ${esc(f.error)}`).join('<br>')
+      : '';
+    $('#ghreport').innerHTML = `<div class="${cls}">${esc(res.message)}${extra}</div>`;
+    if (res.ok) toast(`GitHub sync: ${res.imported} file(s) imported ✓`);
+  });
+  $('#ghcheck')?.addEventListener('click', async () => {
+    const badge = $('#ghbadge');
+    if (badge) { badge.textContent = 'Checking…'; badge.className = 'chip blue'; }
+    $('#ghreport').innerHTML = '<div class="infobanner">Checking the GitHub repository for updates…</div>';
+    const res = await checkForUpdates();
+    guidesPage();
+    const cls = res.status === 'connected' ? 'infobanner' : 'dangerbanner';
+    const changed = res.changed.length
+      ? '<br>' + res.changed.map(c => `• ${esc(c.path)} — ${c.change}`).join('<br>')
+      : '';
+    $('#ghreport').innerHTML = `<div class="${cls}">${esc(res.message)}${changed}</div>`;
+  });
+  $$('[data-ghopen]').forEach(b => b.addEventListener('click', () => nav(`#/guide/${b.dataset.ghopen}`)));
 }
 
 /* ================= import ================= */
@@ -245,6 +326,8 @@ export function guidePage(guideId) {
     <div class="pagehead"><h1>📗 ${esc(g.title)}</h1>
       <p>${g.sections.filter(s => s.include).length} sections · ${gp.qTotal} questions · imported ${fmtDate(g.importedAt.slice(0, 10))}</p></div>
 
+    ${g.source === 'github' ? `<div class="infobanner">🐙 Source: GitHub · ${esc(GH.owner)}/${esc(GH.repo)} · file: ${esc(g.repoPath || '—')} · sections auto-mapped by title — you can adjust the mapping below.</div>` : ''}
+
     ${g.verified
       ? '<div class="infobanner">✅ You marked this guide’s content as verified from an official source.</div>'
       : '<div class="warnbanner">⚠️ Verification status: needs verification — guide content is not automatically fact-checked.</div>'}
@@ -291,6 +374,7 @@ export function guidePage(guideId) {
       <div class="plabel" style="margin-top:0">Manage</div>
       <div class="row">
         <button class="btn small ${g.verified ? '' : 'ok'}" data-act="verify">${g.verified ? 'Unmark verified' : 'Mark content verified (I checked the source)'}</button>
+        <button class="btn small" data-act="remap">Adjust syllabus mapping</button>
         <button class="btn small" data-act="export">Export guide JSON</button>
         <button class="btn small danger" data-act="delete">Delete guide</button>
       </div>
@@ -317,6 +401,7 @@ export function guidePage(guideId) {
       if (next) nav(`#/reader/${guideId}/${next.index}`);
     }
     if (a === 'verify') { markGuideVerified(guideId, !g.verified); toast(g.verified ? 'Marked unverified' : 'Marked verified ✓'); guidePage(guideId); }
+    if (a === 'remap') remapModal(g);
     if (a === 'export') {
       const blob = new Blob([exportGuideJSON(guideId)], { type: 'application/json' });
       const url = URL.createObjectURL(blob);
@@ -330,6 +415,49 @@ export function guidePage(guideId) {
       }, 'Delete guide');
     }
   }));
+}
+
+/* ---- adjust syllabus mapping after import (auto-mapped GitHub guides etc.) ---- */
+function remapModal(g) {
+  const topicOptions = (sel) => SUBJECTS.map(s =>
+    `<optgroup label="${esc(s.name)}">${topicsOf(s.id).map(t =>
+      `<option value="t:${t.id}" ${sel === t.id ? 'selected' : ''}>${esc(t.name)}</option>`).join('')}</optgroup>`).join('');
+  const extraOptions = (sel) => GUIDE_EXTRA_BUCKETS.map(b =>
+    `<option value="x:${b.id}" ${sel === b.id ? 'selected' : ''}>GUIDE EXTRA — ${esc(b.name)}</option>`).join('');
+  const secs = g.sections.filter(s => s.include);
+  modal({
+    title: 'Adjust syllabus mapping',
+    body: `
+      <p class="small" style="margin-top:0">Point each section at an official syllabus topic (IN SYLLABUS) or a guide-extra bucket. Your reading progress and question attempts are kept.</p>
+      ${secs.map(sec => `
+        <div class="field"><label style="font-weight:600">${esc(sec.title)}</label>
+          <select data-rmap="${sec.index}" style="width:100%;padding:8px;border:1.5px solid var(--line);border-radius:9px;font-size:13px;background:#fff">
+            ${topicOptions(sec.topicId)}
+            <optgroup label="Not in official syllabus">${extraOptions(sec.extraBucket)}</optgroup>
+          </select></div>`).join('')}
+    `,
+    actions: [
+      { label: 'Cancel' },
+      { label: 'Apply mapping', cls: 'primary', onClick: () => {
+          $$('[data-rmap]').forEach(sel => {
+            const idx = +sel.dataset.rmap;
+            const v = sel.value;
+            const sec = g.sections.find(s => s.index === idx);
+            if (!sec) return;
+            if (v.startsWith('t:')) { sec.topicId = v.slice(2); sec.inSyllabus = true; sec.extraBucket = null; }
+            else if (v.startsWith('x:')) { sec.extraBucket = v.slice(2); sec.topicId = null; sec.inSyllabus = false; }
+            for (const q of g.questions) if (q.sectionId === sec.id) {
+              q.topicId = sec.topicId;
+              q.subjectId = sec.topicId ? (TOPIC_BY_ID[sec.topicId] || {}).subjectId || null : null;
+              q.extra = !sec.inSyllabus;
+            }
+          });
+          S.save();
+          toast('Mapping updated ✓ — sections and questions re-linked');
+          guidePage(g.id);
+        } },
+    ],
+  });
 }
 
 /* ================= reader ================= */

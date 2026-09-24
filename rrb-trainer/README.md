@@ -40,18 +40,51 @@ guide material beyond the official list is kept as **GUIDE EXTRA**, clearly sepa
 ## How to start (first 5 minutes)
 
 1. **Welcome** → the app shows the full learning flow.
-2. **Guides → Import** → paste or upload your subject-wise study guide (PDF/text).
-   The app detects chapters, questions (with answers/solutions if present), formulas and RRB
-   exam references → you review the syllabus mapping → confirm. Imported content is flagged
+2. **Guides → "RRB Technician Guides" card → Sync Guides** → pulls your real guides from the
+   GitHub repository `moehxn/guideee` (see *GitHub guide source* below). Alternatively use
+   manual import: paste or upload a guide (PDF/text). The app detects chapters, questions
+   (with answers/solutions if present), formulas and RRB exam references, and maps sections to
+   the official syllabus (IN SYLLABUS vs GUIDE EXTRA). Imported content is flagged
    **"not automatically verified"** — you verify it yourself guide-by-guide.
 3. **Study → Subject → Topic** → learn each concept *from zero* (concept → formula or
    "No formula needed — use this rule" → method → guided question → step-by-step → memory
-   method → 5-second recall).
+   method → 5-second recall). Guide sections appear inside their syllabus topics.
 4. Answer questions. Wrong answers open the **full learning panel** and one **different**
    mini-question. Weak concepts go to the **weak bank** and get drilled with *same model,
    different questions*.
 5. Revision is **spaced** (Day 1, 1, 2, 4, 7, 10) with different questions each time.
 6. Use **Plan** (adaptive 10-day plan) or **Smart Study** (10/20/30/60 min) when short on time.
+
+## GitHub guide source (`moehxn/guideee`)
+
+The Guides page has a **RRB Technician Guides — Source: GitHub — Repository: guideee** card with
+**Sync Guides** and **Check for Updates** buttons and a live status badge
+(Connected / Authentication Required / Importing / Imported / Error).
+
+- **Public repository** → "Sync Guides" downloads the guide files (.pdf/.txt/.md) directly in
+  your browser, parses them (PDF via pdf.js), auto-maps chapters to the official syllabus and
+  imports all questions with the `GUIDE` source label. Failed files are listed honestly
+  ("This guide file could not be parsed automatically.") and never faked.
+- **Private repository** → the browser cannot read it, and the app **never stores GitHub
+  passwords or tokens**. The card shows an honest **Authentication Required** state with the
+  message: *"Unable to access the GitHub guide. Please connect/authenticate GitHub or provide a
+  supported guide file."* Two ways to make a private repo work:
+  1. Grant the Arena sandbox's GitHub connection access to the repository (or make it public
+     temporarily), then run the sandbox-side tool:
+     `cd rrb-trainer/tools && npm install && node sync-guides.mjs`
+     It pulls the real files with the authenticated `gh` CLI, parses them with the app's real
+     pipeline and writes `data/guides/` (committed). The browser then imports that bundle
+     (labelled "bundled sync" with its date) — `--local <dir>` pre-checks local files,
+     `--out <dir>` redirects output, `GUIDE_REPO=owner/repo` changes the repository.
+  2. Or import the guide files manually on the Guides page.
+- **Check for Updates** compares the repository's current file SHAs with the last sync and
+  reports added/changed/removed files ("run Sync Guides to import the updates").
+- **Re-sync preserves everything**: guide ids are stable per repo file; section read-state,
+  question attempt history and answers you set are carried over by content match. Updating a
+  guide never resets your progress, weak concepts or mastery.
+- Every guide file row shows subject, section/chapter count, questions found, progress and
+  last-updated. Auto-mapped sections can be re-mapped on the guide's page
+  ("Adjust syllabus mapping").
 
 ## Question sources (honesty contract)
 
@@ -106,6 +139,11 @@ js/
   guides/
     importer.js       guide parsing: chapters, questions, answers, formulas, exam refs,
                       syllabus mapping (IN SYLLABUS / GUIDE EXTRA / skip), finalize
+    github.js         GitHub guide source (moehxn/guideee): live status/sync/update check,
+                      stable ids, progress-preserving re-sync, bundled-data import
+  tools/
+    sync-guides.mjs   sandbox-side sync via authenticated gh CLI → data/guides/ bundle
+  data/guides/        (created by the tool) bundled manifest + parsed guide JSON
   ui/                 pages: home, study, quiz, revision, progress, guides, plan, more
 test/
   smoke.mjs           content + engine unit/integration checks (47)
@@ -124,6 +162,8 @@ persistence layer in `store.js`; the rest of the app doesn't touch localStorage 
 node test/smoke.mjs   # content integrity, generators re-solved, mastery transitions, selector
 node test/e2e.mjs     # import → learn → answer wrong → weak drill → revision → plan → exam
 node test/routes.mjs  # all routes render, not-found handled gracefully
+node test/github.mjs  # GitHub source: auth states, live+bundled sync, progress preservation,
+                      # update detection, offline/partial-failure handling
 ```
 
 ## Data export / reset

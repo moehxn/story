@@ -1,0 +1,7 @@
+# tool dependencies (installed on demand, never committed)
+tools/node_modules/
+
+# never commit credentials or tokens
+*.env
+.env*
+*token*
