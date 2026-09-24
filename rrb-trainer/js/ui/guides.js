@@ -3,10 +3,10 @@
    library, reader, question completion, verification flags.
    Spec §28 + §32: imported content is NOT automatically verified.
    ============================================================ */
-import { S, Bank, guideProgress } from '../store.js';
+import { S, Bank, guideProgress, guideUsableQuestions } from '../store.js';
 import { SUBJECTS, topicsOf, TOPIC_BY_ID, GUIDE_EXTRA_BUCKETS } from '../syllabus.js';
-import { parseGuide, finalizeGuide, readFileAsGuide, removeGuide, setGuideQuestionAnswer, markGuideVerified, exportGuideJSON } from '../guides/importer.js';
-import { GH, ghSyncState, syncGuides, checkForUpdates, ghBadge } from '../guides/github.js';
+import { parseGuide, finalizeGuide, readFileAsGuide, removeGuide, setGuideQuestionAnswer, markGuideVerified, exportGuideJSON, getGuideFull, remapGuideSection } from '../guides/importer.js';
+import { GH, ghSyncState, syncGuides, checkForUpdates, ghBadge, ensureGuideFull } from '../guides/github.js';
 import { $, $$, esc, nl2br, setView, setTopbarActions, nav, sourceChip, bar, pct, toast, modal, confirmModal, emptyState, fmtDate } from './core.js';
 
 const DEMO_GUIDE = `CHAPTER 1: Percentage — Basic Models
@@ -64,7 +64,7 @@ export function guidesPage() {
       return `<button class="item" data-act="open:${g.id}">
         <div class="ic" style="background:${g.source === 'github' ? '#1d4ed8' : '#1e40af'}">${g.source === 'github' ? '🐙' : '📗'}</div>
         <div class="ibody"><b>${esc(g.title)}</b>
-          <small>${g.source === 'github' ? 'GitHub · ' : ''}${g.sections.filter(s => s.include).length} sections · ${gp.qTotal} questions · imported ${fmtDate(g.importedAt.slice(0, 10))}${g.verified ? ' · ✅ you marked verified' : ' · unverified'}</small>
+          <small>${g.source === 'github' ? 'GitHub · ' : ''}${g.sections.filter(s => s.include).length} sections · ${gp.qTotal} questions${g.stub ? ' · large guide (disk-backed)' : ''} · imported ${fmtDate(g.importedAt.slice(0, 10))}${g.verified ? ' · ✅ you marked verified' : ' · unverified'}</small>
           <div style="margin-top:5px">${bar(pct(gp.inDone + gp.exDone, Math.max(1, gp.inTotal + gp.exTotal)))}</div></div>
         <div class="iend">${gp.qNoAns ? `<span class="chip red">${gp.qNoAns} need answers</span>` : ''}</div>
       </button>`;
@@ -315,9 +315,19 @@ function renderReview() {
 }
 
 /* ================= guide detail ================= */
-export function guidePage(guideId) {
-  const g = S.state.guides[guideId];
-  if (!g) return nav('#/guides');
+export async function guidePage(guideId) {
+  const stub = S.state.guides[guideId];
+  if (!stub) return nav('#/guides');
+  /* large (disk-backed) guides load their full content on demand */
+  const g = stub.stub ? (await ensureGuideFull(guideId)) : stub;
+  if (!g) {
+    setView(`
+      <div class="pagehead"><h1>📗 ${esc(stub.title)}</h1></div>
+      <div class="dangerbanner">This large guide's content file could not be loaded (offline or file missing). Press “Sync Guides” on the Guides page to reload it. Nothing was lost — your progress is kept.</div>
+      <div class="card"><button class="btn primary" data-back>‹ Back to Guides</button></div>`);
+    $('[data-back]')?.addEventListener('click', () => nav('#/guides'));
+    return;
+  }
   const gp = guideProgress(guideId);
   const needsAns = g.questions.filter(q => !q.answerAvailable);
   setTopbarActions(`<button class="tbtn" data-back>‹ Back</button>`);
@@ -340,7 +350,7 @@ export function guidePage(guideId) {
         <span>Questions practised: <b>${gp.qDone}/${gp.qTotal}</b></span>
       </div>
       <div class="row" style="margin-top:10px">
-        <button class="btn small primary" data-act="quizall">Practice guide questions</button>
+        <button class="btn small primary" data-act="quizall">Practice guide questions (${guideUsableQuestions(guideId)})</button>
         <button class="btn small" data-act="readnext">${gp.inDone < gp.inTotal ? 'Continue reading' : 'Read guide extra'}</button>
       </div>
     </div>
@@ -348,7 +358,7 @@ export function guidePage(guideId) {
     ${needsAns.length ? `
     <div class="section-label" style="color:var(--bad)">Needs answers (${needsAns.length}) — these questions stay OUT of quizzes until you set the correct option</div>
     <div class="card tight">
-      ${needsAns.map((q, i) => `
+      ${needsAns.slice(0, 15).map((q, i) => `
         <div style="border-bottom:1px dashed var(--line);padding:10px 0">
           <p style="font-weight:600;font-size:13.5px">${nl2br(q.text)}</p>
           ${q.options.map((o, oi) => `
@@ -356,10 +366,11 @@ export function guidePage(guideId) {
               <span class="ol">${'abcd'[oi] || '?'}</span><span>${esc(o)}</span></button>`).join('')}
           ${q.answerText ? `<p class="small">Guide answer line: “${esc(q.answerText)}”</p>` : ''}
         </div>`).join('')}
+      ${needsAns.length > 15 ? `<p class="small center" style="padding:8px 0 2px">…and ${needsAns.length - 15} more. The ${g.questions.length - needsAns.length} answered questions are already available in quizzes — set the rest from the section reader as you study.</p>` : ''}
     </div>` : ''}
 
     <div class="section-label">Sections & syllabus mapping</div>
-    ${g.sections.filter(s => s.include).map(sec => `
+    ${g.sections.filter(s => s.include).slice(0, 60).map(sec => `
       <button class="item" data-read="${sec.index}">
         <div class="ic" style="background:${sec.inSyllabus ? 'var(--science)' : '#9a3412'}">${sec.inSyllabus ? '✓' : '＋'}</div>
         <div class="ibody"><b>${esc(sec.title)}</b>
@@ -369,6 +380,7 @@ export function guidePage(guideId) {
             · ${sec.questionCount} questions${S.isSectionRead(sec.id) ? ' · read ✓' : ''}</small></div>
         <div class="iend">open →</div>
       </button>`).join('')}
+    ${g.sections.filter(s => s.include).length > 60 ? `<p class="small center" style="padding:6px 2px">Showing 60 of ${g.sections.filter(s => s.include).length} sections — open the top unread sections from “Continue reading”, or study them topic-by-topic in the Study tab.</p>` : ''}
 
     <div class="card">
       <div class="plabel" style="margin-top:0">Manage</div>
@@ -439,21 +451,16 @@ function remapModal(g) {
     actions: [
       { label: 'Cancel' },
       { label: 'Apply mapping', cls: 'primary', onClick: () => {
+          let n = 0;
           $$('[data-rmap]').forEach(sel => {
             const idx = +sel.dataset.rmap;
             const v = sel.value;
             const sec = g.sections.find(s => s.index === idx);
             if (!sec) return;
-            if (v.startsWith('t:')) { sec.topicId = v.slice(2); sec.inSyllabus = true; sec.extraBucket = null; }
-            else if (v.startsWith('x:')) { sec.extraBucket = v.slice(2); sec.topicId = null; sec.inSyllabus = false; }
-            for (const q of g.questions) if (q.sectionId === sec.id) {
-              q.topicId = sec.topicId;
-              q.subjectId = sec.topicId ? (TOPIC_BY_ID[sec.topicId] || {}).subjectId || null : null;
-              q.extra = !sec.inSyllabus;
-            }
+            const mapping = v.startsWith('t:') ? { topicId: v.slice(2) } : { extra: v.slice(2) };
+            if (remapGuideSection(g.id, sec.id, mapping)) n++;
           });
-          S.save();
-          toast('Mapping updated ✓ — sections and questions re-linked');
+          toast(`Mapping updated ✓ (${n} section${n === 1 ? '' : 's'} re-linked)`);
           guidePage(g.id);
         } },
     ],
@@ -461,9 +468,11 @@ function remapModal(g) {
 }
 
 /* ================= reader ================= */
-export function readerPage(guideId, sectionIdx) {
-  const g = S.state.guides[guideId];
-  if (!g) return nav('#/guides');
+export async function readerPage(guideId, sectionIdx) {
+  const stub = S.state.guides[guideId];
+  if (!stub) return nav('#/guides');
+  const g = stub.stub ? (await ensureGuideFull(guideId)) : stub;
+  if (!g) return guidePage(guideId);
   const sec = g.sections.find(s => s.index === +sectionIdx);
   if (!sec) return nav(`#/guide/${guideId}`);
   const qs = g.questions.filter(q => q.sectionId === sec.id && q.answerAvailable);

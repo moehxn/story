@@ -5,7 +5,7 @@
    question (answer hidden until checked). Correct → compact
    reinforcement (spec §14). Exam mode: timer + 1/3 negative marking.
    ============================================================ */
-import { S, Bank, weakConcepts, revisionDue } from '../store.js';
+import { S, Bank, weakConcepts, revisionDue , guideUsableQuestions } from '../store.js';
 import { SUBJECTS, SUBJECT_BY_ID, TOPIC_BY_ID, EXAM } from '../syllabus.js';
 import { buildQuiz, pickMiniQuestion, bankCounts } from '../engine/selector.js';
 import { recordAttempt, drillPlanAfterWrong, STATUS_INFO } from '../engine/mastery.js';
@@ -51,7 +51,7 @@ export function currentRun() { return run; }
 export function quizHub() {
   const weak = weakConcepts();
   const due = revisionDue().filter(x => x.overdue);
-  const hasGuides = Object.values(S.state.guides).some(g => g.questions.some(q => q.answerAvailable));
+  const hasGuides = Object.values(S.state.guides).some(g => guideUsableQuestions(g.id) > 0);
   const counts = bankCounts();
 
   const modes = [
@@ -108,7 +108,7 @@ function guideQuizPicker() {
   modal({ title: 'Guide Quiz — which guide?', body: `
     <div class="stack">
       ${guides.map(g => {
-        const n = g.questions.filter(q => q.answerAvailable).length;
+        const n = guideUsableQuestions(g.id);
         return `<button class="btn" data-guide="${g.id}" style="justify-content:flex-start" ${n ? '' : 'disabled'}>
           ${esc(g.title)} <span class="small">(${n} questions)</span></button>`;
       }).join('')}

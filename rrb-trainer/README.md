@@ -61,10 +61,13 @@ The Guides page has a **RRB Technician Guides — Source: GitHub — Repository:
 **Sync Guides** and **Check for Updates** buttons and a live status badge
 (Connected / Authentication Required / Importing / Imported / Error).
 
-- **Public repository** → "Sync Guides" downloads the guide files (.pdf/.txt/.md) directly in
-  your browser, parses them (PDF via pdf.js), auto-maps chapters to the official syllabus and
-  imports all questions with the `GUIDE` source label. Failed files are listed honestly
-  ("This guide file could not be parsed automatically.") and never faked.
+- **Public repository** → "Sync Guides" prefers the committed **bundled sync** in `data/guides/`
+  (fast, offline, no 100+ MB re-download), then compares the repository's current file SHAs and
+  fetches **only the files that changed** live from GitHub (parsed in-browser, PDF via pdf.js).
+  New files are detected and fetched the same way. Chapters are auto-mapped to the official
+  syllabus and questions import with the `GUIDE` source label. Failed files are listed honestly
+  ("This guide file could not be parsed automatically.") and never faked. With no bundled data
+  at all, the full live sync runs (every guide file downloaded in the browser).
 - **Private repository** → the browser cannot read it, and the app **never stores GitHub
   passwords or tokens**. The card shows an honest **Authentication Required** state with the
   message: *"Unable to access the GitHub guide. Please connect/authenticate GitHub or provide a
@@ -85,6 +88,20 @@ The Guides page has a **RRB Technician Guides — Source: GitHub — Repository:
 - Every guide file row shows subject, section/chapter count, questions found, progress and
   last-updated. Auto-mapped sections can be re-mapped on the guide's page
   ("Adjust syllabus mapping").
+
+### What is currently bundled from `moehxn/guideee` (honest per-file report)
+
+The repository's 10 guide books were synced with the sandbox tool (run date: 2026-09-24).
+Result per file — nothing is faked:
+
+| Repository file | Result |
+| --- | --- |
+| `RAILWAY MATHS 6200+ TCS MCQ (ENGLISH MEDIUM) M.pdf` | **Imported** — 5,290 questions, 18 real chapters (Number System, HCF-LCM, Simplification, Trigonometry, Mensuration, Geometry, Algebra, Ratio-Proportion, Time-Work, Time-Speed-Distance, Percentage, Profit-Loss, Discount, SI, CI, Average, Age, Mean-Median-Mode), 3,132 with answer keys (59%), 4,779 carry the book's original exam references (RRB NTPC / Group D / JE / ALP / RPF …), 5,080 mapped into the official syllabus. Stored as a disk-backed stub (localStorage stays ~130 KB). |
+| `teamspy.pdf` | **Imported** — real YCT General Science one-liner book (despite the odd filename): 23 quiz questions, 622 one-liner sections. |
+| 8 other PDFs (YCT Reasoning, 7 Static GK parts) | **Failed honestly** — they are scanned/image-only PDFs with no extractable text layer. Listed as failed with the exact parse message; nothing invented to fill the gap. If text-based (non-scanned) versions are uploaded to the repository, "Sync Guides" will import them automatically. |
+
+Missing maths chapters (Partnership, Boat-Stream, Coordinate Geometry, Pipes-Cistern, Mixture)
+are image-only pages inside the maths PDF — an honest gap, not silently skipped content.
 
 ## Question sources (honesty contract)
 
@@ -149,6 +166,12 @@ test/
   smoke.mjs           content + engine unit/integration checks (47)
   e2e.mjs             full user-flow simulation via esbuild+jsdom (66 checks)
   routes.mjs          every route rendered headlessly (26 routes)
+  github.mjs          GitHub source with mocked repo: auth states, live sync,
+                      bundled sync, changed-file live refresh, progress
+                      preservation (64 checks)
+  github-real.mjs     end-to-end against the REAL bundled repository data:
+                      import, stub storage, reader, quiz, re-sync stability,
+                      syllabus mapping (32 checks)
 ```
 
 Data model: every question links `subject_id / topic_id / subtopic_id / concept_id / method_id /

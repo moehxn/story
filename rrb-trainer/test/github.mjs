@@ -65,7 +65,7 @@ Ans. (b)
 `,
 };
 
-let mode = 'private'; // 'private' | 'public' | 'public-v2' | 'offline' | 'bundled'
+let mode = 'private'; // 'private' | 'public' | 'public-v2' | 'offline' | 'bundled' | 'bundled-live'
 const json = (obj, status = 200) => new Response(JSON.stringify(obj), { status, headers: { 'Content-Type': 'application/json' } });
 
 function stubFetch(url, opts) {
@@ -75,6 +75,14 @@ function stubFetch(url, opts) {
   if (url === api) {
     if (mode === 'private' || mode === 'bundled') return Promise.resolve(json({ message: 'Not Found' }, 404));
     return Promise.resolve(json({ private: false, default_branch: 'main', pushed_at: '2026-09-20T10:00:00Z' }));
+  }
+  if (mode === 'bundled-live' && url.startsWith(api + '/git/trees')) {
+    /* bundled data exists AND the live repository has one file with a NEW sha */
+    const tree = [
+      { type: 'blob', path: 'gk-static.md', sha: '6f3c1b769f151dd2bac9ff65507782b7ff44a068', size: 281 },
+      { type: 'blob', path: 'reasoning-coding.txt', sha: 'SHA-RC-NEW', size: 400 },
+    ];
+    return Promise.resolve(json({ tree, truncated: false }));
   }
   if (url.startsWith(api + '/git/trees')) {
     const v2 = mode === 'public-v2';
@@ -89,17 +97,18 @@ function stubFetch(url, opts) {
   if (url.startsWith('https://raw.githubusercontent.com/moehxn/guideee/main/')) {
     const f = url.split('/main/')[1];
     if (f === 'maths-percentage.txt') return Promise.resolve(new Response(mode === 'public-v2' ? GUIDES_V2[f] : GUIDES[f], { status: 200 }));
+    if (f === 'reasoning-coding.txt' && mode === 'bundled-live') return Promise.resolve(new Response(readFileSync('/tmp/guide-fixture/reasoning-coding.txt', 'utf8') + 'Q3. In a row of 40 students, if a boy is 12th from the left, he is:\n(a) 28th from the right (b) 29th from the right (c) 27th from the right (d) 30th from the right\nAns. (b)\n', { status: 200 }));
     if (f === 'gk-static.md') return Promise.resolve(new Response(GUIDES[f], { status: 200 }));
     if (f === 'broken.pdf') return Promise.resolve(new Response(new Blob([new Uint8Array([1, 2, 3, 4, 5])]), { status: 200 }));
     return Promise.resolve(json({ message: 'Not Found' }, 404));
   }
   if (url.endsWith('data/guides/manifest.json')) {
-    if (mode !== 'bundled') return Promise.resolve(json({ message: 'Not Found' }, 404));
+    if (mode !== 'bundled' && mode !== 'bundled-live') return Promise.resolve(json({ message: 'Not Found' }, 404));
     const m = JSON.parse(readFileSync('/tmp/guide-out/manifest.json', 'utf8'));
     return Promise.resolve(json(m));
   }
   if (url.includes('data/guides/')) {
-    if (mode !== 'bundled') return Promise.resolve(json({ message: 'Not Found' }, 404));
+    if (mode !== 'bundled' && mode !== 'bundled-live') return Promise.resolve(json({ message: 'Not Found' }, 404));
     const file = url.split('data/guides/')[1];
     const data = readFileSync('/tmp/guide-out/' + file, 'utf8');
     return Promise.resolve(new Response(data, { status: 200, headers: { 'Content-Type': 'application/json' } }));
@@ -202,7 +211,7 @@ const stC2 = JSON.parse(window.localStorage.getItem('rrb-t3-trainer-v1'));
 ok(Object.keys(stC2.guides).length === Object.keys(stC1.guides).length, 're-sync does not duplicate guides');
 const math2 = stC2.guides[mathGuideId];
 ok(math2.questions.length === 3, 'updated file adds the new question');
-ok(stC2.read[`g:${mathGuideId}:0`] !== undefined, 'section read-state preserved across update');
+ok(Object.keys(stC2.read).some(k => k.startsWith(`g:${mathGuideId}:s`)), 'section read-state preserved across update (stable content-hash section id)');
 const qstatsAfter = Object.keys(stC2.qstats).filter(id => id.startsWith('g:' + mathGuideId));
 const attemptedAfter = math2.questions.filter(q => stC2.qstats[q.id]).length;
 ok(attemptedAfter >= 1, 'question attempt stats carried over to same-text question (no reset)');
@@ -254,6 +263,23 @@ ok(bundledMaths.sections.some(s => s.topicId === 'percentages'), 'bundled guide 
 ok(stF.githubSync.files.some(f => f.path === 'scanned-notes.pdf' && f.status === 'failed'), 'bundled failure recorded honestly');
 /* live sync guides from phase B/C are still there (nothing reset) */
 ok(stF.guides[mathGuideId] !== undefined, 'previous live-imported guide untouched by bundled sync');
+
+/* ============ G. bundled sync + changed file fetched live ============ */
+console.log('\n== G. bundled sync with a changed file on GitHub (live refresh of just that file) ==');
+mode = 'bundled-live';
+setHash('#/guides'); await sleep(40);
+click($('#ghsync')); await sleep(600);
+ok($('#ghbadge').textContent.includes('Imported'), 'bundled + live refresh imports');
+ok($('#ghreport').textContent.includes('fetched live from GitHub'), 'report mentions the live refresh of changed files');
+const stG = JSON.parse(window.localStorage.getItem('rrb-t3-trainer-v1'));
+const gRC = stG.githubSync.files.find(f => f.path === 'reasoning-coding.txt');
+ok(gRC && gRC.live === true && gRC.status === 'imported' && gRC.sha === 'SHA-RC-NEW', 'changed file marked live-imported in sync state');
+const gRCGuide = stG.guides[gRC.guideId];
+ok(gRCGuide && gRCGuide.questions.length === 3, 'changed file content updated live (2 bundled + 1 new live question)');
+ok(gRCGuide.id.startsWith('gh-reasoning-coding-'), 'updated guide keeps its stable id (no duplicate)');
+const guidesBeforeG = Object.keys(stF.guides).length;
+ok(Object.keys(stG.guides).length === guidesBeforeG, 'bundled + live refresh does not duplicate guides');
+ok(stG.githubSync.files.find(f => f.path === 'gk-static.md') && !stG.githubSync.files.find(f => f.path === 'gk-static.md').live, 'unchanged bundled file NOT re-downloaded');
 
 console.log(`\n==== GITHUB GUIDE TESTS: ${pass} passed, ${fail} failed ====`);
 process.exit(fail ? 1 : 0);

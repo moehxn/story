@@ -52,7 +52,7 @@ const MSG = {
 
 /* ---------- gh helpers (token stays in the environment/CLI) ---------- */
 function gh(args, opts = {}) {
-  return execFileSync('gh', args, { encoding: 'utf8', maxBuffer: 20 * 1024 * 1024, ...opts });
+  return execFileSync('gh', args, { encoding: 'utf8', maxBuffer: 200 * 1024 * 1024, ...opts });
 }
 function ghJson(args) {
   return JSON.parse(gh(args));
@@ -82,7 +82,7 @@ async function loadPdfJs() {
 }
 
 /* Same line-assembly logic as the browser path (js/guides/importer.js). */
-async function pdfToText(buf, timeoutMs = 120000) {
+async function pdfToText(buf, timeoutMs = 600000) {
   const pdfjs = await loadPdfJs();
   const task = pdfjs.getDocument({ data: new Uint8Array(buf), isEvalSupported: false, useSystemFonts: false, disableFontFace: true });
   let timer = null;
@@ -103,7 +103,7 @@ async function pdfToText(buf, timeoutMs = 120000) {
 async function runExtract(task) {
   const doc = await task.promise;
   const out = [];
-  const max = Math.min(doc.numPages, 400);
+  const max = Math.min(doc.numPages, 800);
   for (let p = 1; p <= max; p++) {
     const page = await doc.getPage(p);
     const content = await page.getTextContent();
@@ -117,7 +117,7 @@ async function runExtract(task) {
     lines.push(line);
     out.push(lines.join('\n'));
   }
-  return out.join('\n\n');
+  return { text: out.join('\n\n'), pages: { total: doc.numPages, parsed: max } };
 }
 
 /* ---------- boot the app's real importer (with a storage shim) ---------- */
@@ -140,6 +140,8 @@ async function main() {
   console.log(`Guide sync ${LOCAL_DIR ? 'from LOCAL directory ' + LOCAL_DIR : 'from GitHub'} — ${OWNER}/${REPO}\n`);
 
   let files = [];
+  let repo = null;
+  let branch = 'main';
 
   if (LOCAL_DIR) {
     /* ---------- local mode: list files from a directory ---------- */
@@ -170,7 +172,7 @@ async function main() {
       console.error('\nNothing was written. No guide data was faked.');
       process.exit(1);
     }
-    const branch = repo.default_branch || 'main';
+    branch = repo.default_branch || 'main';
     console.log(`✓ Repository accessible (default branch: ${branch}, private: ${repo.private})`);
 
     const tree = ghJson(['api', `repos/${OWNER}/${REPO}/git/trees/${encodeURIComponent(branch)}?recursive=1`]);
@@ -207,7 +209,9 @@ async function main() {
 
       let text = '';
       if (f.path.toLowerCase().endsWith('.pdf')) {
-        text = await pdfToText(buf);
+        const res = await pdfToText(buf);
+        text = res.text;
+        entry.pages = res.pages; // { total, parsed } — cap is visible, never silent
         if (!text || text.replace(/\s+/g, '').length < 40) {
           throw new Error('PDF has no extractable text layer (scanned/image PDF)');
         }
@@ -228,6 +232,7 @@ async function main() {
       guide.source = 'github';
       guide.repoPath = f.path;
       guide.autoMapped = true;
+      githubMod.stableIds(guide); // content-stable ids → progress survives updates
 
       const guideFile = `${stableId}.json`;
       writeFileSync(join(OUT_DIR, guideFile), JSON.stringify({ type: 'rrb-guide', ...guide }, null, 1));
@@ -253,7 +258,7 @@ async function main() {
   const manifest = {
     type: 'rrb-guide-manifest',
     repo: `${OWNER}/${REPO}`,
-    branch: LOCAL_DIR ? 'local' : (repo ? (repo.default_branch || 'main') : 'main'),
+    branch: LOCAL_DIR ? 'local' : branch,
     localMode: !!LOCAL_DIR,
     syncedAt: new Date().toISOString(),
     files: manifestFiles,

@@ -78,7 +78,7 @@ export const S = {
 
   save() {
     this.state.updatedAt = new Date().toISOString();
-    storage.set(this.state);
+    return storage.set(this.state); // false when storage is full / unavailable
   },
 
   reset() { storage.clear(); this.state = defaultState(); this.save(); },
@@ -266,8 +266,22 @@ export function guideProgress(guideId) {
     const read = S.isSectionRead(sec.id);
     if (sec.inSyllabus) { inTotal++; if (read) inDone++; } else { exTotal++; if (read) exDone++; }
   }
-  for (const q of g.questions) {
-    if (q.answerAvailable) { qTotal++; if (S.state.qstats[q.id]) qDone++; } else qNoAns++;
+  if (g.stub) {
+    /* large guide kept on disk: counts come from the light stub + real qstats */
+    qTotal = g.qTotal || 0;
+    qNoAns = g.qNoAns || 0;
+    const prefix = `g:${guideId}:`;
+    for (const id of Object.keys(S.state.qstats)) if (id.startsWith(prefix)) qDone++;
+  } else {
+    for (const q of g.questions) {
+      if (q.answerAvailable) { qTotal++; if (S.state.qstats[q.id]) qDone++; } else qNoAns++;
+    }
   }
   return { inTotal, inDone, exTotal, exDone, qTotal, qDone, qNoAns };
+}
+
+/* Usable (answered) guide questions — works for full guides AND disk-backed
+   stub guides whose questions live in the runtime Bank. */
+export function guideUsableQuestions(guideId) {
+  return Bank.questionsBy(q => q.guideId === guideId && q.answerAvailable).length;
 }

@@ -36,11 +36,20 @@ route('/smart/:minutes', (p) => smartPage(p.minutes));
 route('/more', morePage);
 
 /* ---------- boot ---------- */
-function boot() {
+async function boot() {
   S.init();
   const stats = registerStarterContent();
   console.log('[boot] starter content:', stats);
   rehydrateGuides();
+
+  /* load disk-backed (bundled GitHub) guides so their questions join the
+     Bank before the first render; failure is honest, never faked */
+  try {
+    const gh = await import('./guides/github.js');
+    const res = await gh.bootBundledGuides();
+    if (res && res.loaded) console.log(`[boot] bundled guides loaded: ${res.loaded}`);
+    if (res && res.failed && res.failed.length) console.warn('[boot] bundled guides failed:', res.failed);
+  } catch (e) { console.warn('[boot] bundled guide load skipped:', e.message); }
 
   if (!location.hash) location.hash = '#/home';
   render();

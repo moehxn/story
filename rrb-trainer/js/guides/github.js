@@ -16,7 +16,10 @@
      carried over by content match. Nothing is reset on update.
    ============================================================ */
 import { S, Bank } from '../store.js';
-import { parseGuide, finalizeGuide, extractPdfText } from './importer.js';
+import {
+  parseGuide, finalizeGuide, extractPdfText,
+  registerRuntimeGuide, getGuideFull, applyGuideOverrides, isRuntimeGuideLoaded,
+} from './importer.js';
 import { TOPIC_BY_ID, SUBJECTS } from '../syllabus.js';
 
 export const GH = { owner: 'moehxn', repo: 'guideee', branch: 'main', label: 'moehxn/guideee' };
@@ -112,88 +115,175 @@ export function ghGuideId(path) {
 
 const normKey = (s) => String(s || '').toLowerCase().replace(/[^a-z0-9]+/g, ' ').trim();
 
-/* ---------- progress-preserving import ----------
-   Same repo file → same guide id. On re-sync:
-   - section read-state is carried over by (chapter + title) match
-   - question stats (attempts) are carried over by question-text match
-   - answers the USER set for "needs answers" questions are kept
-   Nothing is silently reset.                                        */
+/* Guides above this JSON size are kept as disk-backed stubs in localStorage
+   (bundled data / runtime registry) so the 5 MB quota is never blown. */
+export const STUB_THRESHOLD = 1.2 * 1024 * 1024;
+
+/* ---------- content-stable ids ----------
+   Section/question ids are hashes of their content, so a re-synced guide
+   keeps the SAME ids for unchanged content → read-state, attempt stats and
+   user answers survive updates by construction, even when positions shift. */
+const fnv1a = (str) => {
+  let h = 2166136261;
+  for (let i = 0; i < str.length; i++) { h ^= str.charCodeAt(i); h = Math.imul(h, 16777619) >>> 0; }
+  return h.toString(36);
+};
+
+export function stableIds(guide) {
+  const used = new Set();
+  const unique = (base) => { let id = base, n = 2; while (used.has(id)) id = `${base}-${n++}`; used.add(id); return id; };
+  const oldToNew = new Map();
+  guide.sections = (guide.sections || []).map((sec) => {
+    const nid = unique(`g:${guide.id}:s${fnv1a(normKey(sec.chapter + '|' + sec.title))}`);
+    oldToNew.set(sec.id, nid);
+    return { ...sec, id: nid };
+  });
+  guide.questions = (guide.questions || []).map((q) => {
+    const nid = unique(`g:${guide.id}:q${fnv1a(normKey(q.text))}`);
+    const secId = oldToNew.get(q.sectionId) || q.sectionId;
+    return { ...q, id: nid, guideId: guide.id, sectionId: secId };
+  });
+  return guide;
+}
+
+/* Remove orphaned progress entries of this guide (sections/questions that no
+   longer exist after an update). User overrides on still-existing ids stay. */
+function cleanOrphans(guide) {
+  const valid = new Set([...guide.sections.map(s => s.id), ...guide.questions.map(q => q.id)]);
+  const prefix = `g:${guide.id}:`;
+  for (const key of Object.keys(S.state.read)) if (key.startsWith(prefix) && !valid.has(key)) delete S.state.read[key];
+  for (const key of Object.keys(S.state.qstats)) if (key.startsWith(prefix) && !valid.has(key)) delete S.state.qstats[key];
+}
+
+/* Decide how a guide persists: small → full in state (localStorage);
+   large → light stub in state + full content in the runtime registry. */
+function persistGuide(guide, { bundledFile = null } = {}) {
+  const size = JSON.stringify(guide).length;
+  const large = size > STUB_THRESHOLD;
+  let stub = null;
+  if (large) {
+    stub = {
+      id: guide.id, stub: true, bundledFile,
+      title: guide.title, source: guide.source || 'github',
+      repoPath: guide.repoPath || null, fileName: guide.fileName || null,
+      importedAt: guide.importedAt, verified: false, autoMapped: true,
+      sections: guide.sections.map(sec => ({
+        id: sec.id, index: sec.index, chapter: sec.chapter, title: sec.title,
+        topicId: sec.topicId || null, inSyllabus: !!sec.inSyllabus,
+        extraBucket: sec.extraBucket || null, include: sec.include !== false,
+        questionCount: sec.questionCount || 0,
+      })),
+      questions: [],
+      qTotal: guide.questions.length,
+      qNoAns: guide.questions.filter(q => !q.answerAvailable).length,
+      answerOverrides: {}, mapOverrides: {},
+    };
+    /* keep the previous user choices for this stable guide id */
+    const prev = S.state.guides[guide.id];
+    if (prev) {
+      if (prev.verified) stub.verified = true;
+      stub.answerOverrides = { ...(prev.answerOverrides || {}) };
+      stub.mapOverrides = { ...(prev.mapOverrides || {}) };
+    }
+    S.state.guides[guide.id] = stub;
+    registerRuntimeGuide(guide);
+  } else {
+    S.state.guides[guide.id] = guide;
+    Bank.addGuideQuestions(guide.questions);
+  }
+  return { guide, large, stub };
+}
+
+/* ---------- import paths ---------- */
 export function importGuideText(text, meta, stableId) {
-  const carry = snapshotOld(stableId);
+  /* snapshot answers the USER set on the previous version of this guide
+     (either directly in a small guide or as stub overrides) so a live
+     re-sync never loses them */
+  const old = S.state.guides[stableId];
+  const oldFull = old ? (old.stub ? getGuideFull(stableId) : old) : null;
+  const oldAnsByText = new Map();
+  if (oldFull) {
+    for (const q of oldFull.questions || []) {
+      if (q.userAnswered && q.answer >= 0) oldAnsByText.set(normKey(q.text), q.answer);
+    }
+  }
   const parsed = parseGuide(text, meta);
-  parsed.id = stableId; // stable id → stable section/question ids
+  parsed.id = stableId;
   const mappings = {};
   parsed.sections.forEach((sec, i) => {
     mappings[i] = sec.guessTopicId ? { topicId: sec.guessTopicId } : { extra: sec.guessExtra || 'x-misc' };
   });
-  const guide = finalizeGuide(parsed, mappings);
+  let guide = finalizeGuide(parsed, mappings);
   guide.source = 'github';
   guide.repoPath = meta.repoPath || meta.fileName || null;
   guide.autoMapped = true;
-  applyCarry(guide, carry);
+  guide = stableIds(guide);
+  /* re-apply user answers by content match (answers parsed from the guide
+     itself always win when present) */
+  for (const q of guide.questions) {
+    const a = oldAnsByText.get(normKey(q.text));
+    if (a !== undefined && !q.answerAvailable && a >= 0 && a < (q.options || []).length) {
+      q.answer = a; q.answerAvailable = true; q.userAnswered = true;
+    }
+  }
+  cleanOrphans(guide);
+  const res = persistGuide(guide);
+  if (res.large) applyGuideOverrides(res.guide); // user answers/mapping/verified
   S.save();
-  return guide;
+  return res.guide;
 }
 
 /* Ingest a prebuilt guide JSON (bundled sync data or exported guide file)
-   under a stable id, with the same progress preservation. */
-export function ingestPrebuiltGuide(data, stableId) {
-  const carry = snapshotOld(stableId);
-  const guide = JSON.parse(JSON.stringify(data));
+   under a stable id. Content-stable ids keep all progress on re-sync. */
+export function ingestPrebuiltGuide(data, stableId, opts = {}) {
+  let guide = JSON.parse(JSON.stringify(data));
   guide.id = stableId;
   guide.source = 'github';
   guide.autoMapped = true;
-  /* re-key section/question ids to the stable guide id (they may have been
-     exported under a different guide id) */
-  guide.sections = (guide.sections || []).map((sec, i) => ({ ...sec, id: `g:${stableId}:${i}`, index: i }));
-  const secByOldId = new Map((data.sections || []).map((sec, i) => [sec.id, guide.sections[i]]));
-  guide.questions = (guide.questions || []).map((q, qi) => {
-    const sec = secByOldId.get(q.sectionId) || guide.sections[0];
-    return { ...q, id: `g:${stableId}:${sec ? sec.index : 0}:${qi}`, guideId: stableId, sectionId: sec ? sec.id : null };
-  });
-  S.state.guides[stableId] = guide;
-  Bank.addGuideQuestions(guide.questions);
-  applyCarry(guide, carry);
+  guide = stableIds(guide);
+  cleanOrphans(guide);
+  const res = persistGuide(guide, { bundledFile: opts.bundledFile || null });
+  if (res.large) applyGuideOverrides(res.guide); // user answers/mapping/verified
   S.save();
-  return guide;
+  return res.guide;
 }
 
-/* Snapshot + clear the old guide's progress so stale ids cannot leak
-   into the freshly imported guide (ids can collide when indices match). */
-function snapshotOld(stableId) {
-  const old = S.state.guides[stableId];
-  if (!old) return null;
-  const carry = { reads: {}, qstats: {}, answers: {} };
-  for (const s of old.sections || []) {
-    const r = S.state.read[s.id];
-    if (r) { carry.reads[normKey(s.chapter + ' ' + s.title)] = r; delete S.state.read[s.id]; }
+/* Ensure the FULL content of a (possibly stub) guide is loaded — bundled
+   file for disk-backed guides. Returns the full guide or null. */
+export async function ensureGuideFull(guideId) {
+  const full = getGuideFull(guideId);
+  if (full) return full;
+  const stub = S.state.guides[guideId];
+  if (!stub || !stub.stub || !stub.bundledFile) return null;
+  try {
+    const res = await fetch('data/guides/' + stub.bundledFile);
+    if (!res.ok) throw new Error(`HTTP ${res.status}`);
+    const data = await res.json();
+    let guide = { ...data, id: guideId };
+    guide = stableIds(guide);
+    applyGuideOverrides(guide);
+    registerRuntimeGuide(guide);
+    return guide;
+  } catch (e) {
+    return null;
   }
-  for (const q of old.questions || []) {
-    const st = S.state.qstats[q.id];
-    if (st) { carry.qstats[normKey(q.text)] = st; delete S.state.qstats[q.id]; }
-    if (q.answerAvailable && q.answer >= 0) carry.answers[normKey(q.text)] = q.answer;
-  }
-  Bank.removeGuideQuestions(stableId);
-  delete S.state.guides[stableId];
-  return carry;
 }
 
-function applyCarry(guide, carry) {
-  if (!carry) return;
-  let restoredReads = 0, restoredStats = 0, restoredAnswers = 0;
-  for (const sec of guide.sections) {
-    const r = carry.reads[normKey(sec.chapter + ' ' + sec.title)];
-    if (r) { S.state.read[sec.id] = r; restoredReads++; }
+/* ---------- boot: load bundled (disk-backed) guides ----------
+   Fetches data/guides/*.json for every stub guide and registers their
+   questions into the runtime Bank. Honest failure — no faking. */
+export async function bootBundledGuides() {
+  const stubs = Object.values(S.state.guides || {}).filter(g => g.stub && g.bundledFile);
+  if (!stubs.length) return { loaded: 0, failed: [] };
+  const failed = [];
+  let loaded = 0;
+  for (const stub of stubs) {
+    const full = await ensureGuideFull(stub.id);
+    if (full) loaded++;
+    else failed.push(stub.title || stub.id);
   }
-  for (const q of guide.questions) {
-    const st = carry.qstats[normKey(q.text)];
-    if (st) { S.state.qstats[q.id] = st; restoredStats++; }
-    const an = carry.answers[normKey(q.text)];
-    if (an !== undefined && !q.answerAvailable && an >= 0 && an < (q.options || []).length) {
-      q.answer = an; q.answerAvailable = true; q.answerCarried = true; restoredAnswers++;
-    }
-  }
-  guide.carry = { reads: restoredReads, stats: restoredStats, answers: restoredAnswers };
+  if (failed.length) console.warn('[guides] bundled files failed to load:', failed);
+  return { loaded, failed };
 }
 
 /* ---------- subject detection (from the guide's own section mapping) ---------- */
@@ -228,11 +318,17 @@ export async function syncGuides({ onProgress } = {}) {
   const st = ghSyncState();
   const report = { ok: false, mode: null, status: null, imported: 0, failed: 0, files: [], message: '' };
 
-  /* 1) live GitHub (works when the repository is public) */
+  /* bundled sync data (pre-parsed by tools/sync-guides.mjs) — when present it
+     is preferred over re-downloading 100+ MB of PDFs; changed files are
+     fetched live below. */
+  const bundled = await bundledManifest();
+  const hasBundled = !!(bundled && bundled.files.length);
+
+  /* 1) live GitHub (only when no bundled data exists) */
   const status = await ghStatus();
   st.liveStatus = status.status;
   st.lastCheckAt = new Date().toISOString();
-  if (status.status === 'connected') {
+  if (status.status === 'connected' && !hasBundled) {
     report.mode = 'live';
     let files = [];
     try {
@@ -256,10 +352,11 @@ export async function syncGuides({ onProgress } = {}) {
         const guide = importGuideText(text, {
           fileName: f.path, repoPath: f.path, title: titleFromPath(f.path),
         }, ghGuideId(f.path));
+        const stubbed = !!(S.state.guides[guide.id] && S.state.guides[guide.id].stub);
         Object.assign(entry, {
           status: 'imported', guideId: guide.id, title: guide.title,
           subject: subjectOfGuide(guide), sections: guide.sections.length,
-          questions: guide.questions.length, syncedAt: new Date().toISOString(),
+          questions: guide.questions.length, large: stubbed, syncedAt: new Date().toISOString(),
         });
         report.imported++;
       } catch (e) {
@@ -280,13 +377,12 @@ export async function syncGuides({ onProgress } = {}) {
     report.message = report.message + (report.failed
       ? `Imported ${report.imported} of ${report.imported + report.failed} files. ${report.failed} file(s) could not be parsed — see the list below.`
       : `Imported ${report.imported} file(s) from GitHub ✓`);
-    S.save();
+    if (S.save() === false) report.message += ' ⚠️ Browser storage is full — this large guide may not persist. Reload and re-sync, or use a smaller file.';
     return report;
   }
 
-  /* 2) live not reachable → try bundled sync data (private-repo path) */
-  const bundled = await bundledManifest();
-  if (bundled && bundled.files.length) {
+  /* 2) bundled sync data (repo unreachable, or handled above with live refresh) */
+  if (hasBundled) {
     report.mode = 'bundled';
     let available = 0;
     for (const f of bundled.files) {
@@ -303,11 +399,13 @@ export async function syncGuides({ onProgress } = {}) {
         const res = await fetch('data/guides/' + f.guideFile);
         if (!res.ok) throw new Error(`bundled file missing (${res.status})`);
         const data = await res.json();
-        const guide = ingestPrebuiltGuide(data, ghGuideId(f.path));
+        const guide = ingestPrebuiltGuide(data, ghGuideId(f.path), { bundledFile: f.guideFile });
+        const stubbed = !!(S.state.guides[guide.id] && S.state.guides[guide.id].stub);
         Object.assign(entry, {
           status: 'imported', guideId: guide.id, title: guide.title,
           subject: subjectOfGuide(guide), sections: guide.sections.length,
-          questions: guide.questions.length, syncedAt: new Date().toISOString(),
+          questions: guide.questions.length, large: stubbed, guideFile: f.guideFile,
+          syncedAt: new Date().toISOString(),
         });
         report.imported++; available++;
       } catch (e) {
@@ -320,12 +418,51 @@ export async function syncGuides({ onProgress } = {}) {
       onProgress?.(entry);
       S.save();
     }
+    /* the repository is reachable: fetch only files that CHANGED since the
+       bundled sync (re-downloading the whole 100+ MB of PDFs is unnecessary) */
+    let changedCount = 0;
+    if (status.status === 'connected') {
+      try {
+        const { files: liveFiles } = await listGuideFiles(status.defaultBranch || GH.branch);
+        const known = new Map(st.files.map(f => [f.path, f]));
+        const changed = liveFiles.filter(f => !known.get(f.path) || known.get(f.path).sha !== f.sha);
+        changedCount = changed.length;
+        for (const f of changed) {
+          const entry = { path: f.path, sha: f.sha, size: f.size, status: 'importing' };
+          try {
+            const text = await fetchFileText(f, status.defaultBranch || GH.branch);
+            const guide = importGuideText(text, { fileName: f.path, repoPath: f.path, title: titleFromPath(f.path) }, ghGuideId(f.path));
+            const stubbed = !!(S.state.guides[guide.id] && S.state.guides[guide.id].stub);
+            Object.assign(entry, {
+              status: 'imported', guideId: guide.id, title: guide.title,
+              subject: subjectOfGuide(guide), sections: guide.sections.length,
+              questions: guide.questions.length, large: stubbed, live: true, syncedAt: new Date().toISOString(),
+            });
+            report.imported++;
+          } catch (e) {
+            entry.status = 'failed';
+            entry.error = e.kind === 'parse' ? MSG.parse : (e.message || 'Failed.');
+            report.failed++;
+          }
+          st.files = upsertFile(st.files, entry);
+          report.files.push(entry);
+          S.save();
+        }
+      } catch (e) { /* live listing unavailable — bundled import above is still honest */ }
+    }
+
     st.lastSyncAt = new Date().toISOString();
     st.lastMode = 'bundled';
     report.ok = report.imported > 0;
     report.status = report.imported ? 'imported' : 'error';
-    const why = status.status === 'auth-required' ? 'the repository is private' : 'GitHub could not be reached';
-    report.message = `Live GitHub access is not available (${why}) — imported from the bundled sync of ${new Date(bundled.syncedAt).toLocaleString()}. ${report.imported} file(s) imported${report.failed ? `, ${report.failed} failed` : ''}.`;
+    if (status.status === 'connected') {
+      report.message = `Imported ${report.imported} file(s) from the bundled sync of ${new Date(bundled.syncedAt).toLocaleDateString()} (fast, offline)` +
+        (changedCount ? ` + ${changedCount} changed file(s) fetched live from GitHub` : ' — no changes on GitHub since the bundle') +
+        (report.failed ? `. ${report.failed} file(s) could not be parsed — see the list below.` : '.');
+    } else {
+      const why = status.status === 'auth-required' ? 'the repository is private' : 'GitHub could not be reached';
+      report.message = `Live GitHub access is not available (${why}) — imported from the bundled sync of ${new Date(bundled.syncedAt).toLocaleString()}. ${report.imported} file(s) imported${report.failed ? `, ${report.failed} failed` : ''}.`;
+    }
     S.save();
     return report;
   }

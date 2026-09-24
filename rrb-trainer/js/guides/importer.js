@@ -17,51 +17,94 @@ const cap = (s, n) => (s || '').length > n ? s.slice(0, n) + '…' : (s || '');
 const RE_OPTION = /^\s*[\(\[]?([a-dA-D1-4])[\)\].:\-]\s*(.+)$/;
 const RE_ANS = /^\s*(?:Ans|Answer|ANS|ANSWER|Correct\s*(?:Answer|Option)?)\s*[.:\-–]?\s*(.*)$/i;
 const RE_SOL = /^\s*(?:Sol|Solution|Solutions|Explanation|Explain|Expl)\b\s*[.:\-–]?\s*(.*)$/i;
-const RE_CHAPTER = /^\s*(chapter|unit|part|module|lesson)\s*[-–:. ]*(?:no\.?\s*)?(\d+|[IVXLC]+)?\s*[-–:. ]*\s*(.*)$/i;
+/* word must stand alone — never match “Part” inside “Participants” or
+   “unit” inside “unit’s place”; the title part must be a real title */
+const RE_CHAPTER = /^\s*(chapter|unit|part|module|lesson)(?![a-zA-Z'’])\s*[-–:. ]*(?:no\.?\s*)?((?:\d+|[IVXLC]+)?)(?![a-zA-Z])\s*[-–:. ]*\s*(.*)$/i;
 const RE_MD = /^(#{1,4})\s+(.+)$/;
-const RE_QNUM = /^\s*(?:Q\s*[.:)\-]?\s*)?(\d{1,3})\s*[.)\]:]\s*(.*)$/i;
+const RE_QNUM = /^\s*(?:Q\s*[.:)\-]?\s*)?(\d{1,4})\s*[.)\]:\-]\s*(.*)$/i;
+const RE_ANSWER_KEY = /^\s*answer\s*(?:key|s)?\s*[-:.;,–\s]*$/i;
 
-/* Split a line like "(a) 420 (b) 480 (c) 500 (d) 460" into 4 options.
-   Only fires when the FIRST marker sits at the line start (kills false hits). */
-function findMarker(t, from, ch) {
-  for (let i = from; i < t.length - 1; i++) {
-    if (t[i] !== ch && t[i] !== ch.toUpperCase()) continue;
-    const prevOk = i === from || /[\s(\[>]/.test(t[i - 1]);
-    if (!prevOk) continue;
-    let j = i + 1;
-    const delims = ')(].:-';
-    if (delims.includes(t[j])) {
-      let end = j + 1;
-      while (end < t.length && /\s/.test(t[end])) end++;
-      return { start: i, end };
-    }
-  }
-  return null;
+/* Exam-source reference lines printed under questions in real PYQ books:
+   "RRB NTPC 25/01/2021 (Evening)", "RPF S.I. 19/12/2018 (Morning)",
+   "RRB ALP Tier - 1", "RRB Group-D 20-09-2018(Shift-II)" ...
+   These are captured as guide-claimed exam references — never invented. */
+const RE_EXAMREF_LINE = new RegExp(
+  '^\\s*(?:RRB|RRC|RPF|SSC|UPSC|IBPS|SBI|CISF|DRDO|ISRO|ITI|NTPC|ALP|JE|CHSL|CGL|MTS|Group\\s*[A-E0-9]+|RPF\\s*Constable|Delhi\\s*Police|UP\\s*Police|IB\\s*ACIO|FSSAI|Coast\\s*Guard)' +
+  '(?![a-zA-Z])' +
+  '([^?]{0,55}?)' +
+  '(?:\\b\\d{1,2}\\s*[/\\-.]\\s*\\d{1,2}\\s*[/\\-.]\\s*\\d{2,4}|\\(\\s*(?:Morning|Evening|Afternoon|Shift[^)]{0,15})\\s*\\)|\\b(?:CBT|Tier|Stage|Phase)\\b)' +
+  '\\s*$', 'i');
+const RE_EXAMREF_DATE_ONLY = /^\s*[\(\[]?\s*\d{1,2}\s*[/\-.]\s*\d{1,2}\s*[/\-.]\s*\d{2,4}\s*(?:\s*(?:to|–|-)\s*\d{1,2}\s*[/\-.]\s*\d{1,2}\s*[/\-.]\s*\d{2,4})?\s*[\)\]]?\s*$/;
+const RE_EXAMREF_SHORT = /^\s*(?:RRB|RRC|RPF|SSC|UPSC|IBPS|CISF)\s*(?:NTPC|ALP|JE|Group\s*[A-E0-9]+|S\.?I\.?|Tech(?:nician)?|Paramedical|Ministerial)?\s*(?:CBT|Tier|Stage|Phase)?\s*[-–]?\s*\d{0,2}\s*$/i;
+
+function isExamRefLine(line) {
+  const t = (line || '').trim();
+  if (!t || t.length > 70 || /\?/.test(t)) return false;
+  return RE_EXAMREF_LINE.test(t) || RE_EXAMREF_SHORT.test(t);
 }
+/* "(09/08/2018 to 31/08/2018)" — continuation of a two-line exam reference */
+function isExamRefContinuation(line) { return RE_EXAMREF_DATE_ONLY.test((line || '').trim()); }
+
+/* Running page headers used as chapter markers by real guide books:
+   "PinnacleDay: 1st - 7thNumber System" → chapter "Number System" */
+const RE_DAY_HEADER = /^\s*(?:[A-Za-z&.\s]{2,20}?)?\s*Day\s*:\s*\d{1,3}(?:st|nd|rd|th)?\s*[-–]\s*\d{1,3}(?:st|nd|rd|th)?\s*(.*)$/i;
+function dayHeaderTopic(line) {
+  const m = (line || '').trim().match(RE_DAY_HEADER);
+  if (!m) return null;
+  const topic = (m[1] || '').trim();
+  return topic.length >= 3 && topic.length <= 60 ? topic : null;
+}
+
+/* Answer-key pair grids: "61.(b)62.(c)63.(c)64.(b)" → {61:1, 62:2, ...} */
+function parseAnswerKeyLine(line) {
+  const pairs = {};
+  const re = /(\d{1,4})\s*[.:)\-–]?\s*[\(\[]?\s*([a-dA-D])\s*[\)\]]?/g;
+  let m, n = 0;
+  while ((m = re.exec(line))) {
+    const num = +m[1];
+    const idx = m[2].toLowerCase().charCodeAt(0) - 97;
+    if (num >= 1 && num <= 9999 && idx >= 0 && idx <= 3) { pairs[num] = idx; n++; }
+  }
+  /* accept single-pair lines ("1.(c)") only when the whole line is short —
+     longer single matches are usually ordinary text with a number and letter */
+  return (n >= 2 || (n >= 1 && line.trim().length <= 14)) ? pairs : null;
+}
+
+/* Split an options line into up to 4 options.
+   Handles the formats found in real guide books, including options glued
+   together without spaces: "(a) 84(b) 86(c) 12(d) 74".
+   Only fires when the FIRST marker sits at the line start (kills false hits). */
 function splitOptionsLine(line) {
   const t = line.trim();
-  if (!t || t.length < 8) return null;
-  for (const alpha of [true, false]) {
-    const first = alpha ? 'a' : '1';
-    const firstM = findMarker(t, 0, first);
-    if (!firstM || !(firstM.start === 0 || (firstM.start === 1 && /[\(\[<]/.test(t[0])))) continue;
-    const positions = [];
-    let from = 0;
-    for (let n = 0; n < 4; n++) {
-      const ch = alpha ? 'abcd'[n] : '1234'[n];
-      const m = findMarker(t, from, ch);
-      if (!m) break;
-      positions.push(m.end);
-      from = m.end;
+  if (!t || t.length < 6) return null;
+
+  /* "(a) … (b) …" style — tolerates missing spaces; continuation lines may
+     start at any marker, e.g. "(c) 100000(d) 895592" */
+  const mm = t.match(/^[\(\[]?\s*([a-dA-D])\s*[\)\].:,–-]/);
+  if (mm) {
+    const first = mm[1].toLowerCase();
+    const rest = 'abcd'.slice('abcd'.indexOf(first) + 1); // only markers after the first
+    if (rest) {
+      const re = new RegExp('(?=[(\\[]\\s*[' + rest + ']\\s*[\\)\\].:,–-])', 'i');
+      const parts = t.split(re);
+      const opts = parts.map(x => x.replace(/^[\(\[]?\s*[a-d]\s*[\)\].:,–-]\s*/i, '').replace(/[\s.;,]+$/, '').trim()).filter(Boolean);
+      if (opts.length >= 1 && parts.length >= 2) return opts.slice(0, 4);
     }
-    if (positions.length >= 2) {
-      const bounds = [...positions, t.length];
-      const opts = [];
-      for (let i = 0; i < positions.length; i++) {
-        const seg = t.slice(bounds[i], bounds[i + 1]).trim().replace(/[\s.;,]+$/, '');
-        if (seg) opts.push(seg);
-      }
-      if (opts.length >= 2) return opts;
+  }
+  /* 1) … 2) … numeric markers */
+  if (/^[\(\[]?\s*1\s*[\)\].:,–-]/.test(t)) {
+    const parts = t.split(/(?=[(\[]?\s*[234]\s*[\)\].:,–-])/);
+    if (parts.length >= 2) {
+      const opts = parts.map(x => x.replace(/^[\(\[]?\s*[1-4]\s*[\)\].:,–-]\s*/, '').replace(/[\s.;,]+$/, '').trim()).filter(Boolean);
+      if (opts.length >= 2) return opts.slice(0, 4);
+    }
+  }
+  /* a) … b) … bare letters with closing paren */
+  if (/^a\s*\)/i.test(t)) {
+    const parts = t.split(/(?=\b[bcd]\s*\))/i);
+    if (parts.length >= 2) {
+      const opts = parts.map(x => x.replace(/^[a-d]\s*\)\s*/i, '').replace(/[\s.;,]+$/, '').trim()).filter(Boolean);
+      if (opts.length >= 2) return opts.slice(0, 4);
     }
   }
   return null;
@@ -71,6 +114,28 @@ function optionMarkersAhead(line) {
   const inline = splitOptionsLine(line);
   if (inline) return inline.length;
   return RE_OPTION.test(line.trim()) ? 1 : 0;
+}
+
+/* Strict "this line STARTS a new question" test — used to decide when the
+   current question's text/solution ends. A mere "?" is NOT enough: multi-line
+   questions often continue with "...which of the following is correct?". */
+function looksLikeNewQuestion(t, lines, idx) {
+  const trimmed = (t || '').trim();
+  if (!trimmed) return false;
+  if (/^[Qq]\s*[.:)\-]?\s*\d{0,4}\s*[.:)\-]/.test(trimmed)) return true;
+  if (isExamRefLine(trimmed) || isExamRefContinuation(trimmed)) return false;
+  const qnum = trimmed.match(RE_QNUM);
+  const core = qnum ? qnum[2] : trimmed;
+  if (!core || core.replace(/[^A-Za-z0-9]/g, '').length < 6) return false;
+  let optAhead = 0;
+  for (let j = idx + 1; j <= Math.min(idx + 5, lines.length - 1); j++) {
+    const tt = lines[j].trim();
+    if (!tt) continue;
+    const m = optionMarkersAhead(tt);
+    if (m > 0) optAhead += m;
+    else if (optAhead === 0) break;
+  }
+  return optAhead >= 2;
 }
 
 const letterIdx = (ch) => {
@@ -85,7 +150,8 @@ function looksLikeHeading(line) {
   const t = line.trim();
   if (!t || t.length > 90) return false;
   if (RE_MD.test(t)) return true;
-  if (RE_CHAPTER.test(t) && t.replace(RE_CHAPTER, '$3').trim().length > 1) return true;
+  const cm = t.match(RE_CHAPTER);
+  if (cm && (((cm[3] || '').replace(/[^A-Za-z]/g, '').length >= 3) || cm[2])) return true;
   const letters = t.replace(/[^A-Za-z]/g, '');
   if (letters.length >= 4 && letters === letters.toUpperCase() && !/[?:]/.test(t)) return true;
   return false;
@@ -120,11 +186,43 @@ export function parseGuide(rawText, meta = {}) {
   };
   startSection(chapterName);
 
+  /* Books with "Day: 1st - 7thTopic" running headers use those headers as
+     the authoritative chapter structure; stray ALL-CAPS lines (exam names,
+     question fragments) must not split chapters. */
+  const dayMode = lines.filter(l => dayHeaderTopic(l) !== null).length >= 3;
+
   for (let i = 0; i < lines.length; i++) {
     const line = lines[i];
-    const md = line.match(RE_MD);
-    const ch = line.match(RE_CHAPTER);
-    const isCapsHead = looksLikeHeading(line) && !md && !ch;
+    /* running page headers ("PinnacleDay: 1st - 7thNumber System") mark the
+       current chapter; repeated identical headers are skipped entirely */
+    const dayTopic = dayHeaderTopic(line);
+    if (dayTopic !== null || /Day\s*:\s*\d/i.test(line)) {
+      if (dayTopic && dayTopic !== chapterName) { chapterName = dayTopic; startSection(dayTopic); }
+      continue;
+    }
+    const md = dayMode ? null : line.match(RE_MD);
+    /* a chapter heading needs a NUMBER (“Chapter 1: …”) or an ALL-CAPS
+       keyword (“CHAPTER 3 — Light”) — never “unit each are melted…” */
+    let ch = null;
+    if (!dayMode) {
+      const chRaw = line.match(RE_CHAPTER);
+      if (chRaw) {
+        const keyword = (line.trim().match(/^(chapter|unit|part|module|lesson)/i) || [''])[0];
+        const capsKeyword = keyword === keyword.toUpperCase() && /[A-Z]/.test(keyword);
+        const hasTitle = ((chRaw[3] || '').replace(/[^A-Za-z]/g, '').length >= 3);
+        if ((chRaw[2] || capsKeyword) && (hasTitle || chRaw[2])) ch = chRaw;
+      }
+    }
+    let isCapsHead = looksLikeHeading(line) && !md && !ch;
+    /* exam-name lines are never headings ("RRB NTPC CBT - 2", "RRB JE") */
+    if (isCapsHead && isExamRefLine(line)) isCapsHead = false;
+    /* lines dominated by digits/math are question fragments, not headings */
+    if (isCapsHead) {
+      const letters = line.replace(/[^A-Za-z]/g, '').length;
+      const digits = line.replace(/[^0-9]/g, '').length;
+      if (line.includes('=') || digits > letters * 0.6) isCapsHead = false;
+    }
+    if (dayMode) { isCapsHead = false; } // Day-headers define the chapters
     if (md || ch || isCapsHead) {
       const title = cleanTitle(md ? md[2] : ch ? (ch[3] || ch[0]) : line);
       if (ch || (md && md[1].length <= 2) || (isCapsHead && title.length >= 4)) {
@@ -140,13 +238,27 @@ export function parseGuide(rawText, meta = {}) {
   /* extract questions per section */
   let totalQ = 0, withAns = 0, examRefs = 0;
   for (const sec of sections) {
-    const { questions, cleanLines, formulas } = extractQuestions(sec.lines);
+    const { questions, cleanLines, formulas, answerKey } = extractQuestions(sec.lines);
     sec.questions = questions;
     sec.formulas = formulas;
+    sec.answerKey = answerKey;
     sec.text = cleanLines.join('\n').trim();
     totalQ += questions.length;
     withAns += questions.filter(q => q.answerAvailable).length;
     examRefs += questions.filter(q => q.examRef).length;
+  }
+  /* an all-caps "ANSWER KEY" heading may open its own section — merge its
+     pairs into the previous section so they reach that section's questions */
+  for (let i = 1; i < sections.length; i++) {
+    const sec = sections[i];
+    const keyish = sec.questions.length === 0 && Object.keys(sec.answerKey || {}).length >= 2 &&
+      sec.text.replace(/[^\d]/g, '').length > sec.text.replace(/[\d\s]/g, '').length;
+    if (keyish) {
+      const prev = sections[i - 1];
+      Object.assign(prev.answerKey = prev.answerKey || {}, sec.answerKey);
+      sec.answerKey = {};
+      sec.text = '';
+    }
   }
 
   /* 4: mapping guess per section */
@@ -182,10 +294,12 @@ function deriveTitle(text) {
 
 function isLikelyQuestionStart(trimmed, lines, idx) {
   if (!trimmed || RE_ANS.test(trimmed) || RE_SOL.test(trimmed)) return false;
+  if (isExamRefLine(trimmed) || isExamRefContinuation(trimmed)) return false;
   if (RE_OPTION.test(trimmed) || splitOptionsLine(trimmed)) return false;
   const qnum = trimmed.match(RE_QNUM);
   const core = qnum ? qnum[2] : trimmed;
   if (!core || core.length > 420 || trimmed.length > 460) return false;
+  if (core.replace(/[^A-Za-z0-9]/g, '').length < 4) return false; // "?"/punct only
   const hasQ = /\?/.test(core);
   let optAhead = 0;
   for (let j = idx + 1; j <= Math.min(idx + 5, lines.length - 1); j++) {
@@ -203,7 +317,10 @@ function extractQuestions(lines) {
   const questions = [];
   const cleanLines = [];
   const formulas = [];
+  const answerKey = {};
   let i = 0;
+  let inAnswerKey = false;
+  let pendingQnum = null;
   const takeFormula = (line) => {
     const t = line.trim();
     if (t.includes('=') && t.length < 140 && !RE_OPTION.test(t) && !/[?]/.test(t)) formulas.push(t);
@@ -213,7 +330,18 @@ function extractQuestions(lines) {
     const line = lines[i];
     const trimmed = line.trim();
     if (!trimmed) { cleanLines.push(line); i++; continue; }
+    /* answer-key blocks: "Answer Key :-" then grids like "61.(b)62.(c)…"
+       (checked BEFORE the generic Ans-marker skip, which also matches it) */
+    if (RE_ANSWER_KEY.test(trimmed)) { inAnswerKey = true; i++; continue; }
     if (RE_ANS.test(trimmed) || RE_SOL.test(trimmed)) { i++; continue; } // stray markers
+    if (inAnswerKey) {
+      const pairs = parseAnswerKeyLine(trimmed);
+      if (pairs) { Object.assign(answerKey, pairs); i++; continue; }
+      if (!/^\s*[\(\[]?[\d\s.()\[\],;:–-]*$/.test(trimmed)) inAnswerKey = false; // key ended
+    }
+
+    /* a bare "Q.172." on its own line labels the question that follows */
+    if (/^Q?\.?\s*\d{1,4}\s*[.:)\-]\s*$/i.test(trimmed)) { pendingQnum = +(trimmed.match(/\d{1,4}/)[0]); i++; continue; }
 
     if (!isLikelyQuestionStart(trimmed, lines, i)) {
       cleanLines.push(line); takeFormula(line); i++; continue;
@@ -222,12 +350,16 @@ function extractQuestions(lines) {
     /* collect question text (strip leading question number) */
     const qnum = trimmed.match(RE_QNUM);
     const qLines = [qnum ? qnum[2] : trimmed];
+    let examRef = null;
     let j = i + 1;
     while (j < lines.length) {
       const t = lines[j].trim();
       if (!t) { break; }
       if (RE_OPTION.test(t) || RE_ANS.test(t) || RE_SOL.test(t) || splitOptionsLine(t)) break;
-      if (isLikelyQuestionStart(t, lines, j)) break;
+      /* exam-source reference lines under the question are captured, not split */
+      if (isExamRefLine(t)) { examRef = (examRef ? examRef + ' ' : '') + t; j++; continue; }
+      if (isExamRefContinuation(t) && examRef) { examRef += ' ' + t; j++; continue; }
+      if (looksLikeNewQuestion(t, lines, j)) break;
       qLines.push(t);
       j++;
     }
@@ -237,6 +369,7 @@ function extractQuestions(lines) {
     let k = j;
     while (k < lines.length && options.length < 4) {
       const t = lines[k].trim();
+      if (isExamRefLine(t) || (isExamRefContinuation(t) && examRef)) { k++; continue; }
       const inline = splitOptionsLine(t);
       if (inline) {
         for (const o of inline) if (options.length < 4) options.push(o);
@@ -247,7 +380,8 @@ function extractQuestions(lines) {
       if (om && letterIdx(om[1]) >= 0 && letterIdx(om[1]) <= 3) {
         options.push(om[2].trim()); k++;
       } else if (!t && options.length >= 1) { k++; continue; }
-      else if (t && options.length >= 1 && !RE_ANS.test(t) && !RE_SOL.test(t) && options[options.length - 1].length < 20) {
+      else if (t && options.length >= 1 && !RE_ANS.test(t) && !RE_SOL.test(t) && !isExamRefLine(t) && !RE_ANSWER_KEY.test(t)
+               && !looksLikeNewQuestion(t, lines, k) && options[options.length - 1].length < 20) {
         options[options.length - 1] += ' ' + t; k++; // wrapped option line
       }
       else break;
@@ -257,6 +391,7 @@ function extractQuestions(lines) {
     let answerIdx = -1, answerText = '';
     while (k < lines.length) {
       const t = lines[k].trim();
+      if (RE_ANSWER_KEY.test(t)) break; // answer-key heading ends this question
       const am = t.match(RE_ANS);
       if (am) {
         const rest = am[1].trim();
@@ -267,9 +402,12 @@ function extractQuestions(lines) {
         k++;
         continue;
       }
+      if (isExamRefLine(t)) { if (!examRef) examRef = t; k++; continue; }
+      if (isExamRefContinuation(t) && examRef) { examRef += ' ' + t; k++; continue; }
       if (!t) { if (k - j > 8) break; k++; continue; }
       break;
     }
+    const lineExamRef = examRef ? { kind: 'RRB', claim: examRef.replace(/\s+/g, ' ').trim() } : null;
 
     /* solution */
     let solution = '';
@@ -281,7 +419,7 @@ function extractQuestions(lines) {
         const t = lines[k].trim();
         if (!t) { if (parts.join(' ').length > 40) break; k++; continue; }
         if (RE_ANS.test(t) || RE_OPTION.test(t) || splitOptionsLine(t) || looksLikeHeading(t)) break;
-        if (isLikelyQuestionStart(t, lines, k)) break;
+        if (looksLikeNewQuestion(t, lines, k)) break;
         parts.push(t); k++;
         if (parts.join(' ').length > 1600) break;
       }
@@ -292,7 +430,7 @@ function extractQuestions(lines) {
     const answerAvailable = answerIdx >= 0 && options.length >= 3;
     const ok = text.length >= 8 && (options.length >= 3 || answerIdx >= 0 || answerText);
     if (ok) {
-      const examRef = detectExamRef(text + ' ' + solution + ' ' + answerText);
+      const examRef = lineExamRef || detectExamRef(text + ' ' + solution + ' ' + answerText);
       questions.push({
         text: cap(text, 700),
         options: options.slice(0, 4),
@@ -301,13 +439,15 @@ function extractQuestions(lines) {
         answerAvailable,
         solution: solution ? cap(solution, 1600) : '',
         examRef,
+        qnum: qnum ? +qnum[1] : (pendingQnum != null ? pendingQnum : null),
       });
+      pendingQnum = null;
       i = k; continue;
     }
     // not a question after all — keep line as content
     cleanLines.push(line); takeFormula(line); i++;
   }
-  return { questions, cleanLines, formulas: formulas.slice(0, 12) };
+  return { questions, cleanLines, formulas: formulas.slice(0, 12), answerKey };
 }
 
 /* ---------------- 5: finalize after review ----------------
@@ -334,8 +474,16 @@ export function finalizeGuide(parsed, mappings = {}) {
       topicId, inSyllabus, extraBucket, include, questionCount: sec.questions.length,
     });
     if (!include) return;
+    const answerKey = sec.answerKey || {};
     sec.questions.forEach((q, qi) => {
       const id = `g:${guide.id}:${si}:${qi}`;
+      /* apply the guide's own answer key when the inline answer was missing */
+      if (q.answer == null || q.answer < 0) {
+        if (q.qnum != null && answerKey[q.qnum] !== undefined && answerKey[q.qnum] < (q.options || []).length) {
+          q.answer = answerKey[q.qnum];
+          q.answerAvailable = q.options.length >= 3;
+        }
+      }
       const gq = {
         id, guideId: guide.id, sectionId, guideRef: `${sec.chapter} → ${sec.title}`,
         subjectId: topicId ? TOPIC_BY_ID[topicId].subjectId : null,
@@ -345,6 +493,7 @@ export function finalizeGuide(parsed, mappings = {}) {
         source: q.examRef && q.examRef.kind === 'RRB' ? 'PYQ' : 'GUIDE',
         sourceRef: q.examRef ? `Per guide: “${q.examRef.claim}” (guide-claimed, not independently verified)` : 'From uploaded guide',
         text: q.text, options: q.options, answer: q.answer,
+        qnum: q.qnum ?? null,
         answerAvailable: q.answerAvailable,
         solution: q.solution ? q.solution.split(/(?<=[.;])\s+/).slice(0, 8) : [],
         explanation: q.solution || null,
@@ -364,9 +513,72 @@ export function finalizeGuide(parsed, mappings = {}) {
   return guide;
 }
 
+/* ---------- runtime guide layer (large/disk-backed guides) ----------
+   Guides too big for localStorage are stored as LIGHT STUBS in state
+   (sections metadata + counts + user overrides) while the full content
+   lives in a runtime registry fed from data/guides/*.json (bundled sync)
+   or an in-session live sync. All user actions below work on both.  */
+
+const runtimeGuides = new Map(); // guideId -> full guide object (not persisted)
+
+export function registerRuntimeGuide(guide) {
+  runtimeGuides.set(guide.id, guide);
+  Bank.addGuideQuestions(guide.questions || []);
+  return guide;
+}
+
+export function getGuideFull(guideId) {
+  const g = S.state.guides[guideId];
+  if (g && !g.stub) return g;
+  return runtimeGuides.get(guideId) || null;
+}
+
+export function isRuntimeGuideLoaded(guideId) { return runtimeGuides.has(guideId); }
+
+/* Apply user overrides (answers, section mapping, verified) onto a freshly
+   loaded full guide, then register it. */
+export function applyGuideOverrides(guide) {
+  const stub = S.state.guides[guide.id];
+  if (!stub) return guide;
+  if (stub.verified) { guide.verified = true; for (const q of guide.questions || []) q.guideVerified = true; }
+  const ansOv = stub.answerOverrides || {};
+  for (const q of guide.questions || []) {
+    if (ansOv[q.id] !== undefined) { // the user's own answer always wins
+      q.answer = ansOv[q.id];
+      q.answerAvailable = q.answer >= 0 && (q.options || []).length >= 2;
+      q.userAnswered = true;
+    }
+  }
+  const mapOv = stub.mapOverrides || {};
+  for (const sec of guide.sections || []) {
+    const ov = mapOv[sec.id];
+    if (ov) {
+      if (ov.topicId) { sec.topicId = ov.topicId; sec.inSyllabus = true; sec.extraBucket = null; }
+      else if (ov.extra) { sec.extraBucket = ov.extra; sec.topicId = null; sec.inSyllabus = false; }
+      for (const q of guide.questions || []) if (q.sectionId === sec.id) {
+        q.topicId = sec.topicId;
+        q.subjectId = sec.topicId ? (TOPIC_BY_ID[sec.topicId] || {}).subjectId || null : null;
+        q.extra = !sec.inSyllabus;
+      }
+    }
+  }
+  return guide;
+}
+
 export function setGuideQuestionAnswer(guideId, questionId, answerIdx) {
   const g = S.state.guides[guideId];
   if (!g) return;
+  if (g.stub) {
+    g.answerOverrides = g.answerOverrides || {};
+    const already = g.answerOverrides[questionId] !== undefined;
+    g.answerOverrides[questionId] = answerIdx;
+    if (!already && g.qNoAns > 0 && answerIdx >= 0) g.qNoAns--;
+    const full = runtimeGuides.get(guideId);
+    const q = full && full.questions.find(x => x.id === questionId);
+    if (q) { q.answer = answerIdx; q.answerAvailable = answerIdx >= 0 && q.options.length >= 2; q.userAnswered = true; }
+    S.save();
+    return;
+  }
   const q = g.questions.find(x => x.id === questionId);
   if (!q) return;
   q.answer = answerIdx;
@@ -376,6 +588,7 @@ export function setGuideQuestionAnswer(guideId, questionId, answerIdx) {
 
 export function removeGuide(guideId) {
   delete S.state.guides[guideId];
+  runtimeGuides.delete(guideId);
   Bank.removeGuideQuestions(guideId);
   S.save();
 }
@@ -384,15 +597,55 @@ export function markGuideVerified(guideId, val) {
   const g = S.state.guides[guideId];
   if (!g) return;
   g.verified = !!val;
-  for (const q of g.questions) q.guideVerified = !!val;
+  const full = g.stub ? runtimeGuides.get(guideId) : g;
+  if (full) for (const q of full.questions || []) q.guideVerified = !!val;
   S.save();
 }
 
-/* On boot: re-register guide questions from persisted state into the bank. */
+/* On boot: re-register guide questions from persisted state into the bank.
+   Stub (disk-backed) guides are re-loaded from their bundled files by
+   js/guides/github.js → bootBundledGuides(). */
 export function rehydrateGuides() {
   for (const g of Object.values(S.state.guides)) {
+    if (g.stub) continue;
     Bank.addGuideQuestions(g.questions || []);
   }
+}
+
+/* Remap a section to a different syllabus topic / guide-extra bucket.
+   Works for full guides and stubs (override store). */
+export function remapGuideSection(guideId, sectionId, mapping) {
+  const g = S.state.guides[guideId];
+  if (!g) return false;
+  const full = g.stub ? runtimeGuides.get(guideId) : g;
+  const apply = (sec) => {
+    if (mapping.topicId) { sec.topicId = mapping.topicId; sec.inSyllabus = true; sec.extraBucket = null; }
+    else if (mapping.extra) { sec.extraBucket = mapping.extra; sec.topicId = null; sec.inSyllabus = false; }
+  };
+  if (g.stub) {
+    const sec = g.sections.find(x => x.id === sectionId);
+    if (!sec) return false;
+    apply(sec);
+    g.mapOverrides = g.mapOverrides || {};
+    g.mapOverrides[sectionId] = mapping;
+  } else {
+    const sec = g.sections.find(x => x.id === sectionId);
+    if (!sec) return false;
+    apply(sec);
+  }
+  if (full) {
+    const sec = full.sections.find(x => x.id === sectionId);
+    if (sec) {
+      apply(sec);
+      for (const q of full.questions || []) if (q.sectionId === sec.id) {
+        q.topicId = sec.topicId;
+        q.subjectId = sec.topicId ? (TOPIC_BY_ID[sec.topicId] || {}).subjectId || null : null;
+        q.extra = !sec.inSyllabus;
+      }
+    }
+  }
+  S.save();
+  return true;
 }
 
 /* ---------------- file readers ---------------- */
