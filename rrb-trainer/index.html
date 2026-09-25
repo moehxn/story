@@ -27,6 +27,37 @@
   <div id="modal-root"></div>
   <div id="toast-root" aria-live="polite"></div>
 </div>
+<script>
+/* Boot watchdog — if the app fails to start, show the reason ON SCREEN
+   instead of a blank page. Plain JS, no modules, runs even if they fail. */
+(function () {
+  var problems = [];
+  window.addEventListener('error', function (e) {
+    var src = (e.target && e.target.src) ? ' (file: ' + e.target.src + ')' : '';
+    if (e.message || src) problems.push((e.message || 'A file failed to load') + src);
+  }, true);
+  window.addEventListener('unhandledrejection', function (e) {
+    problems.push('Promise error: ' + (e.reason && e.reason.message ? e.reason.message : e.reason));
+  });
+  function panel(msg) {
+    var v = document.getElementById('view');
+    if (!v || (v.innerHTML || '').trim()) return; /* app is rendering — never overwrite it */
+    v.innerHTML = '<div style="font-family:system-ui;padding:24px 16px;max-width:480px;margin:0 auto;line-height:1.5">'
+      + '<h3 style="margin:0 0 8px">&#9203; The app is taking longer than usual to start</h3>'
+      + '<p style="color:#475569;font-size:14px;margin:0 0 12px">' + msg + '</p>'
+      + (problems.length
+          ? '<p style="font-size:12px;color:#b91c1c;background:#fef2f2;border:1px solid #fecaca;border-radius:8px;padding:8px">Report: ' + problems.join('<br>') + '</p>'
+          : '<p style="font-size:12px;color:#475569">No code errors detected — this is likely a slow or interrupted internet connection.</p>')
+      + '<button onclick="location.reload()" style="padding:10px 18px;border:0;border-radius:8px;background:#1d4ed8;color:#fff;font-size:15px">Reload</button>'
+      + '<p style="color:#94a3b8;font-size:12px;margin-top:12px">If this keeps happening: open this page in a Chrome incognito tab (Chrome menu &rarr; New incognito tab) and paste the report above.</p>'
+      + '</div>';
+  }
+  setTimeout(function () {
+    panel('Your connection may be slow, or a file failed to load. Check your internet and tap Reload.');
+  }, 6000);
+})();
+</script>
 <script type="module" src="js/main.js"></script>
+<noscript><div style="font-family:system-ui;padding:24px;text-align:center">Please enable JavaScript to use the RRB Trainer.</div></noscript>
 </body>
 </html>
