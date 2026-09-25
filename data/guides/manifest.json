@@ -1,0 +1,138 @@
+{
+ "type": "rrb-guide-manifest",
+ "repo": "moehxn/guideee",
+ "branch": "main",
+ "localMode": false,
+ "syncedAt": "2026-09-24T16:36:23.818Z",
+ "files": [
+  {
+   "path": "1158_teamspy.pdf",
+   "sha": "19900d5bffc920645307e52b5173a966602b28fd",
+   "size": 3806198,
+   "status": "imported",
+   "error": null,
+   "guideFile": "gh-1158-teamspy-bl739q.json",
+   "pages": {
+    "total": 400,
+    "parsed": 400
+   },
+   "title": "1158 Teamspy",
+   "subject": "General Science (+)",
+   "sections": 622,
+   "questions": 23
+  },
+  {
+   "path": "264101557-yct REASONING.pdf",
+   "sha": "ebbf61de8534392b2a022f36bebc4b7ead33afb5",
+   "size": 25140939,
+   "status": "failed",
+   "error": "This guide file could not be parsed automatically. PDF has no extractable text layer (scanned/image PDF)",
+   "guideFile": null,
+   "pages": {
+    "total": 544,
+    "parsed": 544
+   }
+  },
+  {
+   "path": "Railway_Maths_6200_TCS_MCQ_English_Medium_2nd_Edition_Pinnacle.pdf",
+   "sha": "cba53722fc023d040f576ff4ca4bc9766e982ee8",
+   "size": 11046697,
+   "status": "imported",
+   "error": null,
+   "guideFile": "gh-railway-maths-6200-tcs-mcq-english-m-oxag4m.json",
+   "pages": {
+    "total": 601,
+    "parsed": 601
+   },
+   "title": "Railway Maths 6200 TCS MCQ English Medium 2nd Edition Pinnacle",
+   "subject": "Mathematics",
+   "sections": 18,
+   "questions": 5290
+  },
+  {
+   "path": "Static GK English Medium 2nd Edition (1)_compressed_compressed-1-269-pages-1.pdf",
+   "sha": "6424d2ec2290535bd29146ff38cb7039ae9b7f37",
+   "size": 12578391,
+   "status": "failed",
+   "error": "This guide file could not be parsed automatically. PDF has no extractable text layer (scanned/image PDF)",
+   "guideFile": null,
+   "pages": {
+    "total": 68,
+    "parsed": 68
+   }
+  },
+  {
+   "path": "Static GK English Medium 2nd Edition (1)_compressed_compressed-1-269-pages-2.pdf",
+   "sha": "886e22cf067fbe82d7926298389da1b4fdabd540",
+   "size": 8911564,
+   "status": "failed",
+   "error": "This guide file could not be parsed automatically. PDF has no extractable text layer (scanned/image PDF)",
+   "guideFile": null,
+   "pages": {
+    "total": 68,
+    "parsed": 68
+   }
+  },
+  {
+   "path": "Static GK English Medium 2nd Edition (1)_compressed_compressed-1-269-pages-3.pdf",
+   "sha": "df17695a74037cdc16e50728a4e9df8d1767262d",
+   "size": 8241149,
+   "status": "failed",
+   "error": "This guide file could not be parsed automatically. PDF has no extractable text layer (scanned/image PDF)",
+   "guideFile": null,
+   "pages": {
+    "total": 68,
+    "parsed": 68
+   }
+  },
+  {
+   "path": "Static GK English Medium 2nd Edition (1)_compressed_compressed-1-269-pages-4-pages-1.pdf",
+   "sha": "3aa26451639304ba42ebb10032d68881081d0c37",
+   "size": 4585044,
+   "status": "failed",
+   "error": "This guide file could not be parsed automatically. PDF has no extractable text layer (scanned/image PDF)",
+   "guideFile": null,
+   "pages": {
+    "total": 33,
+    "parsed": 33
+   }
+  },
+  {
+   "path": "Static GK English Medium 2nd Edition (1)_compressed_compressed-1-269-pages-4-pages-2-pages-1.pdf",
+   "sha": "499622da806931bc2cea9c1f1755dc2b59ea4449",
+   "size": 2751593,
+   "status": "failed",
+   "error": "This guide file could not be parsed automatically. PDF has no extractable text layer (scanned/image PDF)",
+   "guideFile": null,
+   "pages": {
+    "total": 18,
+    "parsed": 18
+   }
+  },
+  {
+   "path": "Static GK English Medium 2nd Edition (1)_compressed_compressed-1-269-pages-4-pages-2-pages-2-pages-1.pdf",
+   "sha": "1ed52ea844191a6af63f62c0bc33acbc27c8e39a",
+   "size": 13618998,
+   "status": "failed",
+   "error": "This guide file could not be parsed automatically. PDF has no extractable text layer (scanned/image PDF)",
+   "guideFile": null,
+   "pages": {
+    "total": 7,
+    "parsed": 7
+   }
+  },
+  {
+   "path": "Static GK English Medium 2nd Edition (1)_compressed_compressed-1-269-pages-4-pages-2-pages-2-pages-2.pdf",
+   "sha": "1ac2e7d6d06c50e47a9902107ea2eccdf279a54b",
+   "size": 15891964,
+   "status": "failed",
+   "error": "This guide file could not be parsed automatically. PDF has no extractable text layer (scanned/image PDF)",
+   "guideFile": null,
+   "pages": {
+    "total": 7,
+    "parsed": 7
+   }
+  }
+ ],
+ "note": "Parsed from the real guide files by tools/sync-guides.mjs. Guide content is not automatically verified."
+}
